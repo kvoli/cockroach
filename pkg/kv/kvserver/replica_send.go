@@ -163,6 +163,37 @@ func maybeAdjustWithBreakerError(pErr *roachpb.Error, brErr error) *roachpb.Erro
 	return pErr
 }
 
+func (r *Replica) getBatchRequestQPS(ctx context.Context, ba *roachpb.BatchRequest) float64 {
+	var addSSTSize int64 = 0
+
+	for _, req := range ba.Requests {
+		switch t := req.GetInner().(type) {
+		case *roachpb.AddSSTableRequest:
+			addSSTSize += int64(len(t.Data))
+		default:
+			continue
+		}
+	}
+
+	requestFact := r.RecordRequestSizeFactor()
+	var count int64 = 1
+
+	if requestFact < 1 {
+		return float64(count)
+	}
+
+	// if we set less than 1k, then the divisor is too low.
+	// instead treat it as an add
+	// TODO(kvoli): this seems unreasoanble for testing
+	if requestFact <= 1001 {
+		count += requestFact
+	} else {
+		count += (addSSTSize + 1) / requestFact
+	}
+
+	return float64(count)
+}
+
 // sendWithoutRangeID used to be called sendWithRangeID, accepted a `_forStacks
 // roachpb.RangeID` argument, and had the description below. Ever since Go
 // switched to the register-based calling convention though, this stopped
@@ -188,7 +219,7 @@ func (r *Replica) sendWithoutRangeID(
 ) (_ *roachpb.BatchResponse, rErr *roachpb.Error) {
 	var br *roachpb.BatchResponse
 	if r.leaseholderStats != nil && ba.Header.GatewayNodeID != 0 {
-		r.leaseholderStats.record(ba.Header.GatewayNodeID)
+		r.leaseholderStats.recordCount(r.getBatchRequestQPS(ctx, ba), ba.Header.GatewayNodeID)
 	}
 
 	// Add the range log tag.

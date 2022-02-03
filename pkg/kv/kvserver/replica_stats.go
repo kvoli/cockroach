@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
@@ -30,6 +31,22 @@ const (
 	// return outlier/anomalous data.
 	MinStatsDuration = 5 * time.Second
 )
+
+// RecordRequestSizeFactor wraps "kv.replica_stats.request_size_factor".
+// When this setting is set to 0, all requests are treated uniformly as cost 1.
+// When this setting is greater than or equal to 1, then requests where the key size
+// is known - currently only AddSSTable; are treated as cost = size / request_size_factor.
+var RecordRequestSizeFactor = settings.RegisterIntSetting(
+	settings.TenantWritable,
+	"kv.replica_stats.request_size_factor",
+	"the divisor that is applied to request size, when the size of the request is available; 0 means all requests are treated as cost 1",
+	0,
+).WithPublic()
+
+// RecordRequestSizeFactor returns the size cost factor for a given replica.
+func (r *Replica) RecordRequestSizeFactor() int64 {
+	return int64(RecordRequestSizeFactor.Get(&r.store.cfg.Settings.SV))
+}
 
 type localityOracle func(roachpb.NodeID) string
 
@@ -103,10 +120,6 @@ func (rs *replicaStats) splitRequestCounts(other *replicaStats) {
 			other.mu.requests[i][k] = newVal
 		}
 	}
-}
-
-func (rs *replicaStats) record(nodeID roachpb.NodeID) {
-	rs.recordCount(1, nodeID)
 }
 
 func (rs *replicaStats) recordCount(count float64, nodeID roachpb.NodeID) {
