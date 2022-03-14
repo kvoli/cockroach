@@ -19,3 +19,6 @@
 [submodule "c-deps/proj"]
 	path = c-deps/proj
 	url = https://github.com/cockroachdb/PROJ.git
+[submodule "go"]
+	path = go
+	url = git@github.com:cockroachdb/go.git

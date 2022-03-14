@@ -127,6 +127,7 @@ exports_files([
 # gazelle:exclude pkg/util/buildutil/crdb_test_on.go
 # gazelle:exclude pkg/acceptance/compose/gss/psql/*
 # gazelle:exclude pkg/acceptance/test_main.go
+# gazelle:exclude go
 #
 # Generally useful references:
 #
