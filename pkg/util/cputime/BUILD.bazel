@@ -1,0 +1,15 @@
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cputime",
+    srcs = ["cputime.go"],
+    importpath = "github.com/cockroachdb/cockroach/pkg/util/cputime",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "cputime_test",
+    srcs = ["cputime_test.go"],
+    embed = [":cputime"],
+    deps = ["@com_github_stretchr_testify//assert"],
+)

@@ -395,6 +395,7 @@ ALL_TESTS = [
     "//pkg/util/circuit:circuit_test",
     "//pkg/util/cloudinfo:cloudinfo_test",
     "//pkg/util/contextutil:contextutil_test",
+    "//pkg/util/cputime:cputime_test",
     "//pkg/util/ctxgroup:ctxgroup_test",
     "//pkg/util/duration:duration_test",
     "//pkg/util/encoding/csv:csv_test",
