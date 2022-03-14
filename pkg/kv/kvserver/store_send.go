@@ -16,9 +16,11 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/util/cputime"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/limit"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 )
@@ -164,6 +166,9 @@ func (s *Store) Send(
 	//      by the replica to update the client with. This is appended before returning.
 	var rangeInfos []roachpb.RangeInfo
 
+	// Track the time spent processing this request, on this goroutine.
+	begin := cputime.Now()
+
 	// Run a retry loop on retriable RangeKeyMismatchErrors, where the requested RangeID does
 	// not match any Range on this store. A BatchRequest is retriable when the correct Range
 	// for the request exists within this store.
@@ -202,6 +207,12 @@ func (s *Store) Send(
 			// is considered last by the RangeCache.
 			if len(rangeInfos) > 0 {
 				br.RangeInfos = append(rangeInfos, br.RangeInfos...)
+			}
+
+			delta := cputime.Now() - begin
+			s.RangeCPUMonitor.Report(monitor.Label(repl.GetRangeID().String()), delta)
+			if tenantID, ok := repl.TenantID(); ok {
+				s.TenantCPUMonitor.Report(monitor.Label(tenantID.String()), delta)
 			}
 
 			return br, nil

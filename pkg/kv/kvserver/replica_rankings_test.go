@@ -22,8 +22,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/testutils/serverutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sqlutils"
 	"github.com/cockroachdb/cockroach/pkg/testutils/sstutil"
+	"github.com/cockroachdb/cockroach/pkg/util/encoding"
 	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -183,4 +186,40 @@ func TestAddSSTQPSStat(t *testing.T) {
 		require.GreaterOrEqual(t, queriesAfter, testCase.expectedQPS)
 		require.InDelta(t, queriesAfter, testCase.expectedQPS, 4)
 	}
+}
+
+func TestCPUMonitor(t *testing.T) {
+	ctx := context.Background()
+
+	tc := serverutils.StartNewTestCluster(t, 1, base.TestClusterArgs{
+		ReplicationMode: base.ReplicationManual,
+	})
+
+	defer leaktest.AfterTest(t)()
+	defer tc.Stopper().Stop(ctx)
+	ts := tc.Server(0)
+	db := ts.DB()
+
+	store, err := ts.GetStores().(*Stores).GetStore(ts.GetFirstStoreID())
+	require.Nil(t, err)
+
+	scratchKey := tc.ScratchRange(t)
+	scratchKey = scratchKey[:len(scratchKey):len(scratchKey)]
+	mkKey := func(k string) roachpb.Key {
+		return encoding.EncodeStringAscending(scratchKey, k)
+	}
+
+	busyFn := func(key roachpb.Key, count int) {
+		for i := 0; i < count; i++ {
+			_, pErr := db.Inc(ctx, key, 1)
+			require.Nil(t, pErr)
+		}
+	}
+
+	busyFn(mkKey("a"), 8)
+
+	repl1 := store.LookupReplica(roachpb.RKey(mkKey("a")))
+	repl1Activity := store.RangeCPUMonitor.Get(monitor.Label(repl1.ReplicaID().String()))
+
+	assert.Greater(t, repl1Activity.Value, int64(0))
 }

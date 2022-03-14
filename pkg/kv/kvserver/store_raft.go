@@ -20,7 +20,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness/livenesspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/rpc"
+	"github.com/cockroachdb/cockroach/pkg/util/cputime"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
@@ -502,11 +504,19 @@ func (s *Store) processReady(rangeID roachpb.RangeID) {
 
 	ctx := r.raftCtx
 	start := timeutil.Now()
+	cpuMonitorStart := cputime.Now()
+
 	stats, expl, err := r.handleRaftReady(ctx, noSnap)
 	maybeFatalOnRaftReadyErr(ctx, expl, err)
 	elapsed := timeutil.Since(start)
 	s.metrics.RaftWorkingDurationNanos.Inc(elapsed.Nanoseconds())
 	s.metrics.RaftHandleReadyLatency.RecordValue(elapsed.Nanoseconds())
+
+	cpuMonitorDelta := cputime.Now() - cpuMonitorStart
+	s.RangeCPUMonitor.Report(monitor.Label(rangeID.String()), cpuMonitorDelta)
+	if tenantID, ok := r.TenantID(); ok {
+		s.TenantCPUMonitor.Report(monitor.Label(tenantID.String()), cpuMonitorDelta)
+	}
 	// Warn if Raft processing took too long. We use the same duration as we
 	// use for warning about excessive raft mutex lock hold times. Long
 	// processing time means we'll have starved local replicas of ticks and

@@ -66,6 +66,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
 	"github.com/cockroachdb/cockroach/pkg/util/mon"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/quotapool"
 	"github.com/cockroachdb/cockroach/pkg/util/retry"
@@ -929,6 +930,11 @@ type Store struct {
 		roachpb.StoreCapacity
 	}
 
+	// RangeCPUMonitor tracks the accumulated runtime per range within this store.
+	RangeCPUMonitor monitor.Monitor
+	// TenantCPUMonitor tracks the accumulated runtime per range within this store.
+	TenantCPUMonitor monitor.Monitor
+
 	counts struct {
 		// Number of placeholders removed due to error. Not a good fit for meaningful
 		// metrics, as snapshots to initialized ranges don't get a placeholder.
@@ -1279,6 +1285,9 @@ func NewStore(
 		updateSystemConfigUpdateQueueLimits)
 	queueAdditionOnSystemConfigUpdateBurst.SetOnChange(&cfg.Settings.SV,
 		updateSystemConfigUpdateQueueLimits)
+
+	s.RangeCPUMonitor = monitor.NewBaseMonitor()
+	s.TenantCPUMonitor = monitor.NewBaseMonitor()
 
 	if s.cfg.Gossip != nil {
 		// Add range scanner and configure with queues.
