@@ -17,6 +17,7 @@ import (
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
 	"github.com/cockroachdb/errors"
 )
 
@@ -95,4 +96,9 @@ func (s StoreBase) SetQueueActive(active bool, queue string) error {
 
 	kvQueue.SetDisabled(!active)
 	return nil
+}
+
+// ReplicaActivity is part of kvserverbase.Store.
+func (s StoreBase) ReplicaActivity() []monitor.Activity {
+	return s.store.RangeCPUMonitor.Snapshot()
 }

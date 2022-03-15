@@ -32,6 +32,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/kvcoord"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness/livenesspb"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/security"
@@ -161,6 +162,7 @@ var crdbInternal = virtualSchema{
 		catconstants.CrdbInternalActiveRangeFeedsTable:              crdbInternalActiveRangeFeedsTable,
 		catconstants.CrdbInternalTenantUsageDetailsViewID:           crdbInternalTenantUsageDetailsView,
 		catconstants.CrdbInternalPgCatalogTableIsImplementedTableID: crdbInternalPgCatalogTableIsImplementedTable,
+		catconstants.CrdbInternalKVServerReplicaCPUMonitor:          crdbInternalKVReplicaCPUMonitorTable,
 	},
 	validWithNoDatabaseContext: true,
 }
@@ -474,6 +476,32 @@ CREATE TABLE crdb_internal.tables (
 			return nil
 		}
 		return setupGenerator(ctx, worker, stopper)
+	},
+}
+
+var crdbInternalKVReplicaCPUMonitorTable = virtualSchemaTable{
+	comment: `on-cpu nanos spent per-range, on this store`,
+	schema: `
+CREATE TABLE crdb_internal.kv_replica_cpu_monitor (
+  range_id  INT NOT NULL,
+  nanos     INT
+)`,
+	populate: func(ctx context.Context, p *planner, db catalog.DatabaseDescriptor, addRow func(...tree.Datum) error) error {
+		return p.execCfg.KVStoresIterator.ForEachStore(func(store kvserverbase.Store) error {
+			for _, activity := range store.ReplicaActivity() {
+				rangeID, err := strconv.Atoi(string(activity.Label))
+				if err != nil {
+					return err
+				}
+				if err := addRow(
+					tree.NewDInt(tree.DInt(rangeID)),
+					tree.NewDInt(tree.DInt(activity.Value)),
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
 	},
 }
 

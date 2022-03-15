@@ -156,6 +156,7 @@ const (
 	CrdbInternalActiveRangeFeedsTable
 	CrdbInternalTenantUsageDetailsViewID
 	CrdbInternalPgCatalogTableIsImplementedTableID
+	CrdbInternalKVServerReplicaCPUMonitor
 	InformationSchemaID
 	InformationSchemaAdministrableRoleAuthorizationsID
 	InformationSchemaApplicableRolesID

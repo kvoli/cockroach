@@ -14,6 +14,7 @@ import (
 	"context"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
 	"github.com/cockroachdb/errors"
 )
 
@@ -37,6 +38,9 @@ type Store interface {
 
 	// SetQueueActive disables/enables the named queue.
 	SetQueueActive(active bool, queue string) error
+
+	// ReplicaActivity returns the per-replica activity on this store.
+	ReplicaActivity() []monitor.Activity
 }
 
 // UnsupportedStoresIterator is a StoresIterator that only returns "unsupported"
