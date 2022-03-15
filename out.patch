@@ -1,0 +1,91 @@
+diff --git i/pkg/kv/kvserver/metrics.go w/pkg/kv/kvserver/metrics.go
+index 74ec0c14d1..31f7157c17 100644
+--- i/pkg/kv/kvserver/metrics.go
++++ w/pkg/kv/kvserver/metrics.go
+@@ -1759,7 +1759,7 @@ func newTenantsStorageMetrics() *TenantsStorageMetrics {
+ return sm
+ }
+ 
+-func newStoreMetrics(histogramWindow time.Duration) *StoreMetrics {
++func newStoreMetrics(histogramWindow time.Duration, rangeCPUMonitor *monitor.BaseMonitor, tenantCPUMonitor *monitor.BaseMonitor) *StoreMetrics {
+ storeRegistry := metric.NewRegistry()
+ sm := &StoreMetrics{
+ registry:              storeRegistry,
+@@ -1985,6 +1985,10 @@ func newStoreMetrics(histogramWindow time.Duration) *StoreMetrics {
+ // Replica circuit breaker.
+ ReplicaCircuitBreakerCurTripped: metric.NewGauge(metaReplicaCircuitBreakerCurTripped),
+ ReplicaCircuitBreakerCumTripped: metric.NewCounter(metaReplicaCircuitBreakerCumTripped),
++
++// CPU monitor stats.
++RangeAccumulatedCPUTime:  monitor.NewPromMonitor(rangeCPUMonitor, metaAccumulatedCPUTime),
++TenantAccumulatedCPUTime: monitor.NewPromMonitor(rangeCPUMonitor, metaAccumulatedCPUTime),
+ }
+ storeRegistry.AddMetricStruct(sm)
+ 
+diff --git i/pkg/kv/kvserver/scheduler_test.go w/pkg/kv/kvserver/scheduler_test.go
+index a8f861c984..94669683d1 100644
+--- i/pkg/kv/kvserver/scheduler_test.go
++++ w/pkg/kv/kvserver/scheduler_test.go
+@@ -234,7 +234,7 @@ func TestSchedulerLoop(t *testing.T) {
+ ctx := context.Background()
+ defer stopper.Stop(ctx)
+ 
+-m := newStoreMetrics(metric.TestSampleInterval)
++m := newStoreMetrics(metric.TestSampleInterval, nil, nil)
+ p := newTestProcessor()
+ s := newRaftScheduler(log.MakeTestingAmbientContext(stopper.Tracer()), m, p, 1)
+ 
+@@ -262,7 +262,7 @@ func TestSchedulerBuffering(t *testing.T) {
+ ctx := context.Background()
+ defer stopper.Stop(ctx)
+ 
+-m := newStoreMetrics(metric.TestSampleInterval)
++m := newStoreMetrics(metric.TestSampleInterval, nil, nil)
+ p := newTestProcessor()
+ s := newRaftScheduler(log.MakeTestingAmbientContext(stopper.Tracer()), m, p, 1)
+ s.Start(stopper)
+diff --git i/pkg/kv/kvserver/store.go w/pkg/kv/kvserver/store.go
+index 7e652c2269..279de37b15 100644
+--- i/pkg/kv/kvserver/store.go
++++ w/pkg/kv/kvserver/store.go
+@@ -1149,14 +1149,21 @@ func NewStore(
+ if !cfg.Valid() {
+ log.Fatalf(ctx, "invalid store configuration: %+v", &cfg)
+ }
++
++rangeCPUMonitor := monitor.NewBaseMonitor()
++tenantCPUMonitor := monitor.NewBaseMonitor()
++
+ s := &Store{
+-cfg:      cfg,
+-db:       cfg.DB, // TODO(tschottdorf): remove redundancy.
+-engine:   eng,
+-nodeDesc: nodeDesc,
+-metrics:  newStoreMetrics(cfg.HistogramWindowInterval),
+-ctSender: cfg.ClosedTimestampSender,
++cfg:              cfg,
++db:               cfg.DB, // TODO(tschottdorf): remove redundancy.
++engine:           eng,
++nodeDesc:         nodeDesc,
++metrics:          newStoreMetrics(cfg.HistogramWindowInterval, rangeCPUMonitor, tenantCPUMonitor),
++ctSender:         cfg.ClosedTimestampSender,
++RangeCPUMonitor:  rangeCPUMonitor,
++TenantCPUMonitor: tenantCPUMonitor,
+ }
++
+ if cfg.RPCContext != nil {
+ s.allocator = MakeAllocator(
+ cfg.StorePool,
+@@ -1269,12 +1276,6 @@ func NewStore(
+ int(concurrentRangefeedItersLimit.Get(&cfg.Settings.SV)))
+ })
+ 
+-s.RangeCPUMonitor = monitor.NewBaseMonitor()
+-s.TenantCPUMonitor = monitor.NewBaseMonitor()
+-
+-s.metrics.RangeAccumulatedCPUTime = monitor.NewPromMonitor(s.RangeCPUMonitor, metaAccumulatedCPUTime)
+-s.metrics.TenantAccumulatedCPUTime = monitor.NewPromMonitor(s.TenantCPUMonitor, metaAccumulatedCPUTime)
+-
+ s.tenantRateLimiters = tenantrate.NewLimiterFactory(&cfg.Settings.SV, &cfg.TestingKnobs.TenantRateKnobs)
+ s.metrics.registry.AddMetricStruct(s.tenantRateLimiters.Metrics())
+ 

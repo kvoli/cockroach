@@ -234,7 +234,7 @@ func TestSchedulerLoop(t *testing.T) {
 	ctx := context.Background()
 	defer stopper.Stop(ctx)
 
-	m := newStoreMetrics(metric.TestSampleInterval)
+	m := newStoreMetrics(metric.TestSampleInterval, nil, nil)
 	p := newTestProcessor()
 	s := newRaftScheduler(log.MakeTestingAmbientContext(stopper.Tracer()), m, p, 1)
 
@@ -262,7 +262,7 @@ func TestSchedulerBuffering(t *testing.T) {
 	ctx := context.Background()
 	defer stopper.Stop(ctx)
 
-	m := newStoreMetrics(metric.TestSampleInterval)
+	m := newStoreMetrics(metric.TestSampleInterval, nil, nil)
 	p := newTestProcessor()
 	s := newRaftScheduler(log.MakeTestingAmbientContext(stopper.Tracer()), m, p, 1)
 	s.Start(stopper)

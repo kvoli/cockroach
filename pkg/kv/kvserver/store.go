@@ -1149,12 +1149,14 @@ func NewStore(
 	if !cfg.Valid() {
 		log.Fatalf(ctx, "invalid store configuration: %+v", &cfg)
 	}
+	rangeCPUMonitor := monitor.NewBaseMonitor()
+	tenantCPUMonitor := monitor.NewBaseMonitor()
 	s := &Store{
 		cfg:      cfg,
 		db:       cfg.DB, // TODO(tschottdorf): remove redundancy.
 		engine:   eng,
 		nodeDesc: nodeDesc,
-		metrics:  newStoreMetrics(cfg.HistogramWindowInterval),
+		metrics:  newStoreMetrics(cfg.HistogramWindowInterval, rangeCPUMonitor, tenantCPUMonitor),
 		ctSender: cfg.ClosedTimestampSender,
 	}
 	if cfg.RPCContext != nil {
@@ -1172,6 +1174,8 @@ func NewStore(
 		)
 	}
 	s.replRankings = newReplicaRankings()
+	s.RangeCPUMonitor = rangeCPUMonitor
+	s.TenantCPUMonitor = tenantCPUMonitor
 
 	s.draining.Store(false)
 	s.scheduler = newRaftScheduler(cfg.AmbientCtx, s.metrics, s, storeSchedulerConcurrency)
@@ -1285,9 +1289,6 @@ func NewStore(
 		updateSystemConfigUpdateQueueLimits)
 	queueAdditionOnSystemConfigUpdateBurst.SetOnChange(&cfg.Settings.SV,
 		updateSystemConfigUpdateQueueLimits)
-
-	s.RangeCPUMonitor = monitor.NewBaseMonitor()
-	s.TenantCPUMonitor = monitor.NewBaseMonitor()
 
 	if s.cfg.Gossip != nil {
 		// Add range scanner and configure with queues.

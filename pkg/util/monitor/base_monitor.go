@@ -12,7 +12,7 @@ package monitor
 
 import "github.com/cockroachdb/cockroach/pkg/util/syncutil"
 
-// BaseMonitor tracks labels and values, assuming aggregation is additive.:
+// BaseMonitor tracks labels and values, assuming aggregation is additive.
 type BaseMonitor struct {
 	mu struct {
 		syncutil.Mutex

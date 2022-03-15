@@ -26,6 +26,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/metric"
 	"github.com/cockroachdb/cockroach/pkg/util/metric/aggmetric"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
 	"github.com/cockroachdb/cockroach/pkg/util/syncutil"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 )
@@ -292,6 +293,18 @@ var (
 		Help:        "Number of keys written (i.e. applied by raft) per second to the store, averaged over a large time period as used in rebalancing decisions",
 		Measurement: "Keys/Sec",
 		Unit:        metric.Unit_COUNT,
+	}
+	metaAccumulatedCPUTime = metric.Metadata{
+		Name:        "rebalancing.cputime",
+		Help:        "Accumulated cpu time executing requests on this store across all ranges.",
+		Measurement: "Nanoseconds",
+		Unit:        metric.Unit_NANOSECONDS,
+	}
+	metaTenantCPUTime = metric.Metadata{
+		Name:        "tenant.cputime",
+		Help:        "Accumulated cpu time executing requests on this store across all tenants.",
+		Measurement: "Nanoseconds",
+		Unit:        metric.Unit_NANOSECONDS,
 	}
 
 	// Metric for tracking follower reads.
@@ -1355,8 +1368,10 @@ type StoreMetrics struct {
 	Reserved           *metric.Gauge
 
 	// Rebalancing metrics.
-	AverageQueriesPerSecond *metric.GaugeFloat64
-	AverageWritesPerSecond  *metric.GaugeFloat64
+	AverageQueriesPerSecond  *metric.GaugeFloat64
+	AverageWritesPerSecond   *metric.GaugeFloat64
+	RangeAccumulatedCPUTime  *monitor.PromMonitor
+	TenantAccumulatedCPUTime *monitor.PromMonitor
 
 	// Follower read metrics.
 	FollowerReadsCount *metric.Counter
@@ -1760,7 +1775,11 @@ func newTenantsStorageMetrics() *TenantsStorageMetrics {
 	return sm
 }
 
-func newStoreMetrics(histogramWindow time.Duration) *StoreMetrics {
+func newStoreMetrics(
+	histogramWindow time.Duration,
+	rangeCPUMonitor *monitor.BaseMonitor,
+	tenantCPUMonitor *monitor.BaseMonitor,
+) *StoreMetrics {
 	storeRegistry := metric.NewRegistry()
 	sm := &StoreMetrics{
 		registry:              storeRegistry,
@@ -1988,6 +2007,8 @@ func newStoreMetrics(histogramWindow time.Duration) *StoreMetrics {
 		// Replica circuit breaker.
 		ReplicaCircuitBreakerCurTripped: metric.NewGauge(metaReplicaCircuitBreakerCurTripped),
 		ReplicaCircuitBreakerCumTripped: metric.NewCounter(metaReplicaCircuitBreakerCumTripped),
+		RangeAccumulatedCPUTime: monitor.NewPromMonitor(rangeCPUMonitor, metaAccumulatedCPUTime),
+		TenantAccumulatedCPUTime: monitor.NewPromMonitor(tenantCPUMonitor, metaTenantCPUTime),
 	}
 	storeRegistry.AddMetricStruct(sm)
 
