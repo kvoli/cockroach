@@ -163,6 +163,8 @@ var crdbInternal = virtualSchema{
 		catconstants.CrdbInternalTenantUsageDetailsViewID:           crdbInternalTenantUsageDetailsView,
 		catconstants.CrdbInternalPgCatalogTableIsImplementedTableID: crdbInternalPgCatalogTableIsImplementedTable,
 		catconstants.CrdbInternalKVServerReplicaCPUMonitor:          crdbInternalKVReplicaCPUMonitorTable,
+		catconstants.CrdbInternalKVReplicaSlotTable:                 crdbInternalKVReplicaSlotTable,
+		catconstants.CrdbInternalKVTenantSlotTable:                  crdbInternalKVTenantSlotTable,
 	},
 	validWithNoDatabaseContext: true,
 }
@@ -496,6 +498,49 @@ CREATE TABLE crdb_internal.kv_replica_cpu_monitor (
 				if err := addRow(
 					tree.NewDInt(tree.DInt(rangeID)),
 					tree.NewDInt(tree.DInt(activity.Value)),
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	},
+}
+
+var crdbInternalKVReplicaSlotTable = virtualSchemaTable{
+	comment: `current slotted ranges`,
+	schema: `
+CREATE TABLE crdb_internal.kv_replica_slot_table (
+  slot  INT NOT NULL,
+  range_id     INT
+)`,
+	populate: func(ctx context.Context, p *planner, db catalog.DatabaseDescriptor, addRow func(...tree.Datum) error) error {
+		return p.execCfg.KVStoresIterator.ForEachStore(func(store kvserverbase.Store) error {
+			for i, rangeID := range store.RangeSlots() {
+				if err := addRow(
+					tree.NewDInt(tree.DInt(i)),
+					tree.NewDInt(tree.DInt(rangeID)),
+				); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	},
+}
+var crdbInternalKVTenantSlotTable = virtualSchemaTable{
+	comment: `current slotted tenants`,
+	schema: `
+CREATE TABLE crdb_internal.kv_tenant_slot_table (
+  slot  INT NOT NULL,
+  tenant_id     INT
+)`,
+	populate: func(ctx context.Context, p *planner, db catalog.DatabaseDescriptor, addRow func(...tree.Datum) error) error {
+		return p.execCfg.KVStoresIterator.ForEachStore(func(store kvserverbase.Store) error {
+			for i, tenantID := range store.TenantSlots() {
+				if err := addRow(
+					tree.NewDInt(tree.DInt(i)),
+					tree.NewDInt(tree.DInt(tenantID.ToUint64())),
 				); err != nil {
 					return err
 				}

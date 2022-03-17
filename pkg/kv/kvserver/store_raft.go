@@ -442,6 +442,7 @@ func (s *Store) enqueueRaftUpdateCheck(rangeID roachpb.RangeID) {
 }
 
 func (s *Store) processRequestQueue(ctx context.Context, rangeID roachpb.RangeID) bool {
+	cputimeBegin := cputime.Now()
 	value, ok := s.replicaQueues.Load(int64(rangeID))
 	if !ok {
 		return false
@@ -487,6 +488,14 @@ func (s *Store) processRequestQueue(ctx context.Context, rangeID roachpb.RangeID
 				s.replicaQueues.Delete(int64(rangeID))
 			}
 			q.Unlock()
+		}
+	}
+
+	delta := cputime.Now() - cputimeBegin
+	if repl, exists := s.mu.replicasByRangeID.Load(rangeID); !exists {
+		s.RangeCPUMonitor.Report(monitor.Label(rangeID.String()), delta)
+		if tenantID, ok := repl.TenantID(); ok {
+			s.TenantCPUMonitor.Report(monitor.Label(tenantID.String()), delta)
 		}
 	}
 

@@ -6771,6 +6771,75 @@ specified store on the node it's run from. One of 'mvccGC', 'merge', 'split',
 			Volatility: tree.VolatilityVolatile,
 		},
 	),
+
+	"crdb_internal.kv_monitor_slot_replica": makeBuiltin(
+		tree.FunctionProperties{
+			Category:         categorySystemRepair,
+			DistsqlBlocklist: true, // applicable only on the gateway
+			Undocumented:     true,
+		},
+		tree.Overload{
+			Types: tree.ArgTypes{
+				{"range_id", types.Int},
+				{"slot_id", types.Int},
+			},
+			ReturnType: tree.FixedReturnType(types.Bool),
+			Fn: func(ctx *tree.EvalContext, args tree.Datums) (tree.Datum, error) {
+				rangeID := roachpb.RangeID(tree.MustBeDInt(args[0]))
+				slot := int(tree.MustBeDInt(args[1]))
+
+				var foundRepl bool
+				if err := ctx.KVStoresIterator.ForEachStore(func(store kvserverbase.Store) error {
+					foundRepl = store.MonitorSlotRange(rangeID, slot)
+					return nil
+				}); err != nil {
+					return nil, err
+				}
+				if !foundRepl {
+					return nil, errors.Errorf("replica with range id %s not found on this node", rangeID)
+				}
+				return tree.DBoolTrue, nil
+			},
+			Info: `Adds the range with "range_id" to the tracked ranges, in
+			slot "slot". Slotted range ids are exported to prometheus in their
+			respective slots. By default there are 10 slots available.`,
+			Volatility: tree.VolatilityVolatile,
+		},
+	),
+	"crdb_internal.kv_monitor_slot_tenant": makeBuiltin(
+		tree.FunctionProperties{
+			Category:         categorySystemRepair,
+			DistsqlBlocklist: true, // applicable only on the gateway
+			Undocumented:     true,
+		},
+		tree.Overload{
+			Types: tree.ArgTypes{
+				{"tenant_id", types.Int},
+				{"slot_id", types.Int},
+			},
+			ReturnType: tree.FixedReturnType(types.Bool),
+			Fn: func(ctx *tree.EvalContext, args tree.Datums) (tree.Datum, error) {
+				tenantID := roachpb.MakeTenantID(uint64(tree.MustBeDInt(args[0])))
+				slot := int(tree.MustBeDInt(args[1]))
+
+				var foundTenant bool
+				if err := ctx.KVStoresIterator.ForEachStore(func(store kvserverbase.Store) error {
+					foundTenant = store.MonitorSlotTenant(tenantID, slot)
+					return nil
+				}); err != nil {
+					return nil, err
+				}
+				if !foundTenant {
+					return nil, errors.Errorf("tenant with tenant id %s not found on this node", tenantID)
+				}
+				return tree.DBoolTrue, nil
+			},
+			Info: `Adds the tenant with "tenant_id" to the tracked tenants, in
+			slot "slot". Slotted tenants are exported to prometheus in their
+			respective slots. By default there are 10 slots available.`,
+			Volatility: tree.VolatilityVolatile,
+		},
+	),
 }
 
 var lengthImpls = func(incBitOverload bool) builtinDefinition {

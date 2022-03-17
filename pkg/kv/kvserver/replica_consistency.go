@@ -33,9 +33,11 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/storage/fs"
 	"github.com/cockroachdb/cockroach/pkg/util/bufalloc"
 	"github.com/cockroachdb/cockroach/pkg/util/contextutil"
+	"github.com/cockroachdb/cockroach/pkg/util/cputime"
 	"github.com/cockroachdb/cockroach/pkg/util/envutil"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
+	"github.com/cockroachdb/cockroach/pkg/util/monitor"
 	"github.com/cockroachdb/cockroach/pkg/util/protoutil"
 	"github.com/cockroachdb/cockroach/pkg/util/quotapool"
 	"github.com/cockroachdb/cockroach/pkg/util/stop"
@@ -710,6 +712,8 @@ func (*Replica) sha512(
 func (r *Replica) computeChecksumPostApply(ctx context.Context, cc kvserverpb.ComputeChecksum) {
 	stopper := r.store.Stopper()
 	now := timeutil.Now()
+	cputimeNow := cputime.Now()
+
 	r.mu.Lock()
 	var notify chan struct{}
 	if c, ok := r.mu.checksums[cc.ChecksumID]; !ok {
@@ -842,5 +846,11 @@ A file preventing this node from restarting was placed at:
 		log.Errorf(ctx, "could not run async checksum computation (ID = %s): %v", cc.ChecksumID, err)
 		// Set checksum to nil.
 		r.computeChecksumDone(ctx, cc.ChecksumID, nil, nil)
+	}
+
+	delta := cputime.Now() - cputimeNow
+	r.store.RangeCPUMonitor.Report(monitor.Label(r.GetRangeID().String()), delta)
+	if tenantID, ok := r.TenantID(); ok {
+		r.store.TenantCPUMonitor.Report(monitor.Label(tenantID.String()), delta)
 	}
 }

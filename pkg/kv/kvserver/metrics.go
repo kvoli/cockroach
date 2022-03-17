@@ -2007,8 +2007,8 @@ func newStoreMetrics(
 		// Replica circuit breaker.
 		ReplicaCircuitBreakerCurTripped: metric.NewGauge(metaReplicaCircuitBreakerCurTripped),
 		ReplicaCircuitBreakerCumTripped: metric.NewCounter(metaReplicaCircuitBreakerCumTripped),
-		RangeAccumulatedCPUTime: monitor.NewPromMonitor(rangeCPUMonitor, metaAccumulatedCPUTime),
-		TenantAccumulatedCPUTime: monitor.NewPromMonitor(tenantCPUMonitor, metaTenantCPUTime),
+		RangeAccumulatedCPUTime:         monitor.NewPromMonitor(rangeCPUMonitor, metaAccumulatedCPUTime),
+		TenantAccumulatedCPUTime:        monitor.NewPromMonitor(tenantCPUMonitor, metaTenantCPUTime),
 	}
 	storeRegistry.AddMetricStruct(sm)
 

@@ -157,6 +157,8 @@ const (
 	CrdbInternalTenantUsageDetailsViewID
 	CrdbInternalPgCatalogTableIsImplementedTableID
 	CrdbInternalKVServerReplicaCPUMonitor
+	CrdbInternalKVReplicaSlotTable
+	CrdbInternalKVTenantSlotTable
 	InformationSchemaID
 	InformationSchemaAdministrableRoleAuthorizationsID
 	InformationSchemaApplicableRolesID

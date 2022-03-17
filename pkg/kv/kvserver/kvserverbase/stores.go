@@ -41,6 +41,20 @@ type Store interface {
 
 	// ReplicaActivity returns the per-replica activity on this store.
 	ReplicaActivity() []monitor.Activity
+
+	// MonitorSlotRange attempts to slot a range into the stores monitor at
+	// slot.
+	MonitorSlotRange(rangeID roachpb.RangeID, slot int) bool
+
+	// MonitorSlotTenant attempts to slot a tenant into the stores monitor at
+	// slot.
+	MonitorSlotTenant(tenantID roachpb.TenantID, slot int) bool
+
+	// RangeSlots returns the currently slotted Ranges
+	RangeSlots() []roachpb.RangeID
+
+	// TenantSlots returns the currently slotted Tenants
+	TenantSlots() []roachpb.TenantID
 }
 
 // UnsupportedStoresIterator is a StoresIterator that only returns "unsupported"

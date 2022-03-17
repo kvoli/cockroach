@@ -155,3 +155,10 @@ func (p *PromMonitor) labelPrometheusMetric(l Label) *io_prometheus_client.Metri
 	}
 	return nil
 }
+
+func (p *PromMonitor) Slotted() []Label {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return p.mu.slots
+}

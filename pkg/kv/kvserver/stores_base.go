@@ -12,6 +12,7 @@ package kvserver
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"unsafe"
 
@@ -101,4 +102,46 @@ func (s StoreBase) SetQueueActive(active bool, queue string) error {
 // ReplicaActivity is part of kvserverbase.Store.
 func (s StoreBase) ReplicaActivity() []monitor.Activity {
 	return s.store.RangeCPUMonitor.Snapshot()
+}
+
+// MonitorSlotRange attempts to slot a range into the stores monitor at
+// slot.
+func (s StoreBase) MonitorSlotRange(rangeID roachpb.RangeID, slot int) bool {
+	return s.store.metrics.RangeAccumulatedCPUTime.SetSlot(monitor.Label(rangeID.String()), slot)
+}
+
+// MonitorSlotTenant attempts to slot a tenant into the stores monitor at
+// slot.
+func (s StoreBase) MonitorSlotTenant(tenantID roachpb.TenantID, slot int) bool {
+	return s.store.metrics.TenantAccumulatedCPUTime.SetSlot(monitor.Label(tenantID.String()), slot)
+}
+
+// RangeSlots returns the currently slotted Ranges
+func (s StoreBase) RangeSlots() []roachpb.RangeID {
+	slots := s.store.metrics.RangeAccumulatedCPUTime.Slotted()
+	ret := make([]roachpb.RangeID, 0)
+	for _, v := range slots {
+		rangeID, err := strconv.Atoi(string(v))
+		if err != nil {
+			rangeID = 0
+		}
+		ret = append(ret, roachpb.RangeID(rangeID))
+	}
+	return ret
+}
+
+// TenantSlots returns the currently slotted Tenants
+func (s StoreBase) TenantSlots() []roachpb.TenantID {
+	slots := s.store.metrics.TenantAccumulatedCPUTime.Slotted()
+	ret := make([]roachpb.TenantID, 0)
+	for _, v := range slots {
+		tenantID, err := strconv.Atoi(string(v))
+		if err != nil || tenantID < 1 {
+			// TODO(kvoli): Need to approach this in a better manner.
+			tenantID = 666
+		}
+		ret = append(ret, roachpb.MakeTenantID(uint64(tenantID)))
+	}
+	return ret
+
 }
