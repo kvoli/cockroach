@@ -177,14 +177,14 @@ func TestReplicaStats(t *testing.T) {
 			rs.recordCount(1, req)
 		}
 		manual.Increment(int64(time.Second))
-		if actual, _ := rs.perLocalityDecayingQPS(); !floatMapsEqual(tc.expected, actual) {
+		if actual, _ := rs.perLocalityDecayingRate(); !floatMapsEqual(tc.expected, actual) {
 			t.Errorf("%d: incorrect per-locality QPS averages: %s", i, pretty.Diff(tc.expected, actual))
 		}
 		var expectedAvgQPS float64
 		for _, v := range tc.expected {
 			expectedAvgQPS += v
 		}
-		if actual, _ := rs.avgQPS(); actual != expectedAvgQPS {
+		if actual, _ := rs.meanRate(); actual != expectedAvgQPS {
 			t.Errorf("%d: avgQPS() got %f, want %f", i, actual, expectedAvgQPS)
 		}
 		// Verify that QPS numbers get cut in half after another second.
@@ -192,15 +192,15 @@ func TestReplicaStats(t *testing.T) {
 		for k, v := range tc.expected {
 			tc.expected[k] = v / 2
 		}
-		if actual, _ := rs.perLocalityDecayingQPS(); !floatMapsEqual(tc.expected, actual) {
+		if actual, _ := rs.perLocalityDecayingRate(); !floatMapsEqual(tc.expected, actual) {
 			t.Errorf("%d: incorrect per-locality QPS averages: %s", i, pretty.Diff(tc.expected, actual))
 		}
 		expectedAvgQPS /= 2
-		if actual, _ := rs.avgQPS(); actual != expectedAvgQPS {
+		if actual, _ := rs.meanRate(); actual != expectedAvgQPS {
 			t.Errorf("%d: avgQPS() got %f, want %f", i, actual, expectedAvgQPS)
 		}
 		rs.resetRequestCounts()
-		if actual, _ := rs.sumQueriesLocked(); actual != 0 {
+		if actual, _ := rs.sumLocked(); actual != 0 {
 			t.Errorf("%d: unexpected non-empty QPS averages after resetting: %+v", i, actual)
 		}
 	}
@@ -224,7 +224,7 @@ func TestReplicaStatsDecay(t *testing.T) {
 	})
 
 	{
-		counts, dur := rs.perLocalityDecayingQPS()
+		counts, dur := rs.perLocalityDecayingRate()
 		if len(counts) != 0 {
 			t.Errorf("expected empty request counts, got %+v", counts)
 		}
@@ -232,7 +232,7 @@ func TestReplicaStatsDecay(t *testing.T) {
 			t.Errorf("expected duration = 0, got %v", dur)
 		}
 		manual.Increment(1)
-		if _, dur := rs.perLocalityDecayingQPS(); dur != 1 {
+		if _, dur := rs.perLocalityDecayingRate(); dur != 1 {
 			t.Errorf("expected duration = 1, got %v", dur)
 		}
 		rs.resetRequestCounts()
@@ -247,7 +247,7 @@ func TestReplicaStatsDecay(t *testing.T) {
 			awsLocalities[2]: 2,
 			awsLocalities[3]: 1,
 		}
-		actual, dur := rs.perLocalityDecayingQPS()
+		actual, dur := rs.perLocalityDecayingRate()
 		if dur != 0 {
 			t.Errorf("expected duration = 0, got %v", dur)
 		}
@@ -256,7 +256,7 @@ func TestReplicaStatsDecay(t *testing.T) {
 		}
 
 		var totalDuration time.Duration
-		for i := 0; i < len(rs.mu.requests)-1; i++ {
+		for i := 0; i < len(rs.mu.records)-1; i++ {
 			manual.Increment(int64(replStatsRotateInterval))
 			totalDuration = time.Duration(float64(replStatsRotateInterval+totalDuration) * decayFactor)
 			expected := make(perLocalityCounts)
@@ -264,7 +264,7 @@ func TestReplicaStatsDecay(t *testing.T) {
 				counts[k] = v * decayFactor
 				expected[k] = counts[k] / totalDuration.Seconds()
 			}
-			actual, dur = rs.perLocalityDecayingQPS()
+			actual, dur = rs.perLocalityDecayingRate()
 			if expectedDur := replStatsRotateInterval * time.Duration(i+1); dur != expectedDur {
 				t.Errorf("expected duration = %v, got %v", expectedDur, dur)
 			}
@@ -277,7 +277,7 @@ func TestReplicaStatsDecay(t *testing.T) {
 
 		manual.Increment(int64(replStatsRotateInterval))
 		expected := make(perLocalityCounts)
-		if actual, _ := rs.perLocalityDecayingQPS(); !reflect.DeepEqual(expected, actual) {
+		if actual, _ := rs.perLocalityDecayingRate(); !reflect.DeepEqual(expected, actual) {
 			t.Errorf("incorrect per-locality request counts: %s", pretty.Diff(expected, actual))
 		}
 		rs.resetRequestCounts()
@@ -299,7 +299,7 @@ func TestReplicaStatsDecay(t *testing.T) {
 			awsLocalities[2]: (2*decayFactor + 2) / durationDivisor,
 			awsLocalities[3]: (1*decayFactor + 3) / durationDivisor,
 		}
-		if actual, _ := rs.perLocalityDecayingQPS(); !reflect.DeepEqual(expected, actual) {
+		if actual, _ := rs.perLocalityDecayingRate(); !reflect.DeepEqual(expected, actual) {
 			t.Errorf("incorrect per-locality request counts: %s", pretty.Diff(expected, actual))
 		}
 	}
@@ -332,13 +332,13 @@ func TestReplicaStatsDecaySmoothing(t *testing.T) {
 		awsLocalities[2]: 2,
 		awsLocalities[3]: 1,
 	}
-	if actual, _ := rs.perLocalityDecayingQPS(); !reflect.DeepEqual(expected, actual) {
+	if actual, _ := rs.perLocalityDecayingRate(); !reflect.DeepEqual(expected, actual) {
 		t.Errorf("incorrect per-locality request counts: %s", pretty.Diff(expected, actual))
 	}
 
 	increment := replStatsRotateInterval / 2
 	manual.Increment(int64(increment))
-	actual1, dur := rs.perLocalityDecayingQPS()
+	actual1, dur := rs.perLocalityDecayingRate()
 	if dur != increment {
 		t.Errorf("expected duration = %v; got %v", increment, dur)
 	}
@@ -351,7 +351,7 @@ func TestReplicaStatsDecaySmoothing(t *testing.T) {
 
 	// Verify that all values decrease as time advances if no requests come in.
 	manual.Increment(1)
-	actual2, _ := rs.perLocalityDecayingQPS()
+	actual2, _ := rs.perLocalityDecayingRate()
 	if len(actual1) != len(actual2) {
 		t.Fatalf("unexpected different results sizes (expected %d, got %d)", len(actual1), len(actual2))
 	}
@@ -363,7 +363,7 @@ func TestReplicaStatsDecaySmoothing(t *testing.T) {
 
 	// Ditto for passing a window boundary.
 	manual.Increment(int64(increment))
-	actual3, _ := rs.perLocalityDecayingQPS()
+	actual3, _ := rs.perLocalityDecayingRate()
 	if len(actual2) != len(actual3) {
 		t.Fatalf("unexpected different results sizes (expected %d, got %d)", len(actual2), len(actual3))
 	}
