@@ -100,6 +100,8 @@ func (r *RangeMap) GetRange(key string) *Range {
 type Replica struct {
 	spanConf *roachpb.SpanConfig
 	desc     *roachpb.RangeDescriptor
+	// Here we need to simulate replica stats with a manual clock.
+	repl    *Replica
 }
 
 // Store simulates a store within a node.
@@ -129,6 +131,9 @@ type State struct {
 	lastNodeID int
 	Nodes      map[int]*Node
 
+	// tick this separately
+	storePool *kvserver.StorePool
+
 	// This is the entire key space.
 	Ranges RangeMap
 }
@@ -151,12 +156,12 @@ func (s *State) AddNode(ctx context.Context) (nodeID int) {
 // AddStore adds a store to an existing node.
 func (s *State) AddStore(ctx context.Context, node int) {
 	allocator := kvserver.MakeAllocator(
-		nil,
+		s.storePool, /* share storepool */
 		func(string) (time.Duration, bool) {
 			return 0, true
 		},
-		nil,
-		nil,
+		nil, /* knobs */
+		nil, /* storeMetrics */
 	)
 	s.Nodes[node].Stores = append(s.Nodes[node].Stores, &Store{allocator: allocator})
 }
@@ -168,8 +173,62 @@ func (s *State) ApplyStateChange(ctx context.Context, event *ConfigEvent) {
 // ApplyAllocatorAction updates the state with allocator ops such as
 // moving/adding/removing replicas.
 func (s *State) ApplyAllocatorAction(
-	ctx context.Context, action kvserver.AllocatorAction, priority float64,
+	ctx context.Context,
+	store Store,
+	repl *Replica,
+	action kvserver.AllocatorAction,
+	priority float64,
 ) {
+	// Required Fields for each call:
+	//
+	// Allocate(Non)Voter / Rebalance(Non)Voter / TransferLeaseTarget
+	//  existingVoters []roachpb.ReplicaDescriptor
+	// 	existingNonVoters []roachpb.ReplicaDescriptor
+	//  storePool
+	//  replica_stats for replica called on
+
+	switch action {
+	case kvserver.AllocatorNoop, kvserver.AllocatorRangeUnavailable:
+		// No op
+	case kvserver.AllocatorAddVoter:
+		// AllocateVoter
+	case kvserver.AllocatorAddNonVoter:
+		// AllocateNonVoter
+	case kvserver.AllocatorRemoveVoter:
+		// no allocator call
+	case kvserver.AllocatorRemoveNonVoter:
+		// no allocator call
+	case kvserver.AllocatorReplaceDeadVoter:
+		// AllocateVoter
+	case kvserver.AllocatorReplaceDeadNonVoter:
+		// AllocateNonVoter
+	case kvserver.AllocatorReplaceDecommissioningVoter:
+		// AllocateVoter
+	case kvserver.AllocatorRemoveDecommissioningVoter:
+		// TransferLeaseTarget
+	case kvserver.AllocatorRemoveDecommissioningNonVoter:
+		// TransferLeaseTarget
+	case kvserver.AllocatorRemoveDeadVoter:
+		// no allocator call
+	case kvserver.AllocatorRemoveDeadNonVoter:
+		// no allocator call
+	case kvserver.AllocatorRemoveLearner:
+		// no allocator call
+	case kvserver.AllocatorConsiderRebalance:
+		store.allocator.RebalanceVoter(
+			ctx,
+			*repl.spanConf,
+			nil,                       /* raftStatus */
+			nil,                       /* existingVoters */
+			nil,                       /* existingNonVoters */
+			kvserver.RangeUsageInfo{}, /* rangeUsageInfo */
+			1,                         /* filter */
+			nil,                       /* scorerOptions */
+		)
+	case kvserver.AllocatorFinalizeAtomicReplicationChange:
+		// no allocator call
+	default:
+	}
 }
 
 // ApplyLoad updates the state replicas with the LoadEvent info. These events
@@ -177,6 +236,41 @@ func (s *State) ApplyAllocatorAction(
 // as QPS for replicas. Note that this means we don't store which keys were
 // written and therefore reads never fail.
 func (s *State) ApplyLoad(ctx context.Context, le LoadEvent) {
+
+	// apply load to a replica that is the leaseholder for the range (replica_stats -> range_usage_info[local])
+	// https://github.com/cockroachdb/cockroach/blob/8077e97f32caccd35c07cc1d2ffbd16bea558847/pkg/kv/kvserver/replicate_queue.go#L1309;;
+	//
+	// in aggregate this must affect the store that the same replica is on. (sum(replica_stats) -> store_descriptor -> store_pool[global])
+	// https://github.com/cockroachdb/cockroach/blob/8077e97f32caccd35c07cc1d2ffbd16bea558847/pkg/kv/kvserver/allocator.go#L1224-L1214
+	//
+	// replica stats has a notion of time to record the rate of X. This would
+	// be fine to simulate, however the per locality rate is more involved and
+	// therefore we should just simulate replica stats.
+	//
+	// the store_pool needs to be attached to each allocator, we can either:
+	// (1) maintain the a ref to the same store pool in every store's allocator
+	// (2) maintain distinct store pools (to then artificially delay info propogation)
+	//
+	// separate but related, the store rebalancer will perform a similar action
+	// and needs to access the store pool list.
+	// https://github.com/cockroachdb/cockroach/blob/8077e97f32caccd35c07cc1d2ffbd16bea558847/pkg/kv/kvserver/store_rebalancer.go#L242-L241
+	//
+	// In addition, it needs to have a slightly different view of the local replica QPS stats. Using replica rankings:
+	// https://github.com/cockroachdb/cockroach/blob/8077e97f32caccd35c07cc1d2ffbd16bea558847/pkg/kv/kvserver/replica_rankings.go#L30-L37
+	//
+	// Most of where these are accumulated on an can be found here, with the raw recording being done against replica_stats:
+	// https://github.com/cockroachdb/cockroach/blob/8077e97f32caccd35c07cc1d2ffbd16bea558847/pkg/kv/kvserver/store.go#L2911-L2984
+	//
+	// So in order to apply load:
+	//
+	// QPS: we can use replica_stats with a manual clock that we tick.
+	// 		https://github.com/cockroachdb/cockroach/blob/8077e97f32caccd35c07cc1d2ffbd16bea558847/pkg/kv/kvserver/replica_stats.go#L62-L62
+	//      We then need to aggregate this over a store and also update the accumulator when we add in the store rebalancer.
+	// LeaseCount: ignore - not responsible
+	// RangeCount: ignore - not responsible
+	// L0SubLevels: ignore - initially
+	// LogicalBytes: ignore - not used
+	// WritesPerSecond: ignore - initially not used
 }
 
 func shouldRun(time.Time) bool {
