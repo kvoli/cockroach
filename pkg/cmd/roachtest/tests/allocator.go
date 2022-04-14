@@ -11,10 +11,13 @@
 package tests
 
 import (
+	"bytes"
 	"context"
 	gosql "database/sql"
+	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
@@ -24,7 +27,9 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"github.com/cockroachdb/cockroach/pkg/workload/histogram"
 	"github.com/cockroachdb/errors"
 )
 
@@ -42,7 +47,7 @@ func registerAllocator(r registry.Registry) {
 		m.Go(func(ctx context.Context) error {
 			t.Status("loading fixture")
 			if err := c.RunE(
-				ctx, c.Node(1), "./cockroach", "workload", "fixtures", "import", "tpch", "--scale-factor", "10",
+				ctx, c.Node(1), "./cockroach", "workload", "fixtures", "import", "tpch", "--scale-factor", "1",
 			); err != nil {
 				t.Fatal(err)
 			}
@@ -54,6 +59,7 @@ func registerAllocator(r registry.Registry) {
 		c.Start(ctx, t.L(), startOpts, install.MakeClusterSettings(), c.Range(start+1, c.Spec().NodeCount))
 
 		c.Run(ctx, c.Node(1), `./cockroach workload init kv --drop`)
+		t.Status("starting workload")
 		for node := 1; node <= c.Spec().NodeCount; node++ {
 			node := node
 			// TODO(dan): Ideally, the test would fail if this queryload failed,
@@ -72,9 +78,27 @@ func registerAllocator(r registry.Registry) {
 		m = c.NewMonitor(ctx, c.All())
 		m.Go(func(ctx context.Context) error {
 			t.Status("waiting for reblance")
-			return waitForRebalance(ctx, t.L(), db, maxStdDev)
+			err := waitForRebalance(ctx, t.L(), db, maxStdDev)
+			if err == nil {
+				// Setup the roachperf reporting.
+			}
+			return err
 		})
+
+		// Tick once before starting the backup, and once after to capture the
+		// total elapsed time.
+		tick, perfBuf := initAllocatorJobPerfArtifacts(t.Name(), 2*time.Hour)
+		tick()
 		m.Wait()
+		tick()
+
+		dest := filepath.Join(t.PerfArtifactsDir(), "stats.json")
+		if err := c.RunE(ctx, c.Node(1), "mkdir -p "+filepath.Dir(dest)); err != nil {
+			log.Errorf(ctx, "failed to create perf dir: %+v", err)
+		}
+		if err := c.PutString(ctx, perfBuf.String(), dest, 0755, c.Node(1)); err != nil {
+			log.Errorf(ctx, "failed to upload perf artifacts to node: %s", err.Error())
+		}
 	}
 
 	r.Add(registry.TestSpec{
@@ -102,10 +126,38 @@ func registerAllocator(r registry.Registry) {
 	})
 }
 
-// printRebalanceStats prints the time it took for rebalancing to finish and the
-// final standard deviation of replica counts across stores.
-func printRebalanceStats(l *logger.Logger, db *gosql.DB) error {
-	// TODO(cuongdo): Output these in a machine-friendly way and graph.
+type rebalanceStats struct {
+	rebalanceInterval  int64
+	rangeEventCount    int64
+	replicaCountStdDev float64
+	rangesPerStore     map[int64]int64
+}
+
+// initAllocatorJobPerfArtifacts a histogram, creates a performance
+// artifact directory and returns a method that when invoked records a tick.
+func initAllocatorJobPerfArtifacts(testName string, timeout time.Duration) (func(), *bytes.Buffer) {
+	// Register a named histogram to track the total time the allocator took.
+	// Roachperf uses this information to display information about this
+	// roachtest.
+	reg := histogram.NewRegistry(
+		timeout,
+		histogram.MockWorkloadName,
+	)
+	reg.GetHandle().Get(testName)
+
+	bytesBuf := bytes.NewBuffer([]byte{})
+	jsonEnc := json.NewEncoder(bytesBuf)
+	tick := func() {
+		reg.Tick(func(tick histogram.Tick) {
+			_ = jsonEnc.Encode(tick.Snapshot())
+		})
+	}
+
+	return tick, bytesBuf
+}
+
+func getRebalanceStats(db *gosql.DB) (*rebalanceStats, error) {
+	rebalanceStats := rebalanceStats{rangesPerStore: make(map[int64]int64)}
 
 	// Output time it took to rebalance.
 	{
@@ -115,9 +167,15 @@ func printRebalanceStats(l *logger.Logger, db *gosql.DB) error {
 				`(SELECT max(timestamp) FROM system.eventlog WHERE "eventType"=$1)`,
 			`node_join`, /* sql.EventLogNodeJoin */
 		).Scan(&rebalanceIntervalStr); err != nil {
-			return err
+			return nil, err
 		}
-		l.Printf("cluster took %s to rebalance\n", rebalanceIntervalStr)
+		timeInterval, err := time.Parse("15:04:05.000000", rebalanceIntervalStr)
+		interval := ((timeInterval.Hour()*60)+timeInterval.Minute())*60 + timeInterval.Second()
+
+		if err != nil {
+			return nil, err
+		}
+		rebalanceStats.rebalanceInterval = int64(interval)
 	}
 
 	// Output # of range events that occurred. All other things being equal,
@@ -126,9 +184,9 @@ func printRebalanceStats(l *logger.Logger, db *gosql.DB) error {
 		var rangeEvents int64
 		q := `SELECT count(*) from system.rangelog`
 		if err := db.QueryRow(q).Scan(&rangeEvents); err != nil {
-			return err
+			return nil, err
 		}
-		l.Printf("%d range events\n", rangeEvents)
+		rebalanceStats.rangeEventCount = rangeEvents
 	}
 
 	// Output standard deviation of the replica counts for all stores.
@@ -137,28 +195,38 @@ func printRebalanceStats(l *logger.Logger, db *gosql.DB) error {
 		if err := db.QueryRow(
 			`SELECT stddev(range_count) FROM crdb_internal.kv_store_status`,
 		).Scan(&stdDev); err != nil {
-			return err
+			return nil, err
 		}
-		l.Printf("stdDev(replica count) = %.2f\n", stdDev)
+		rebalanceStats.replicaCountStdDev = stdDev
 	}
 
 	// Output the number of ranges on each store.
 	{
 		rows, err := db.Query(`SELECT store_id, range_count FROM crdb_internal.kv_store_status`)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var storeID, rangeCount int64
 			if err := rows.Scan(&storeID, &rangeCount); err != nil {
-				return err
+				return nil, err
 			}
-			l.Printf("s%d has %d ranges\n", storeID, rangeCount)
+			rebalanceStats.rangesPerStore[storeID] = rangeCount
 		}
 	}
+	return &rebalanceStats, nil
+}
 
-	return nil
+// printRebalanceStats prints the time it took for rebalancing to finish and the
+// final standard deviation of replica counts across stores.
+func printRebalanceStats(l *logger.Logger, stats rebalanceStats) {
+	l.Printf("cluster took %f to rebalance\n", stats.rebalanceInterval)
+	l.Printf("%d range events\n", stats.rangeEventCount)
+	l.Printf("stdDev(replica count) = %.2f\n", stats.replicaCountStdDev)
+	for storeID, rangeCount := range stats.rangesPerStore {
+		l.Printf("s%d has %d ranges\n", storeID, rangeCount)
+	}
 }
 
 type replicationStats struct {
@@ -245,17 +313,21 @@ func waitForRebalance(
 			if stableSeconds <= stats.SecondsSinceLastEvent {
 				l.Printf("replica count stddev = %f, max allowed stddev = %f\n", stats.ReplicaCountStdDev, maxStdDev)
 				if stats.ReplicaCountStdDev > maxStdDev {
-					_ = printRebalanceStats(l, db)
+					rebalanceStats, err := getRebalanceStats(db)
+					if err != nil {
+						printRebalanceStats(l, *rebalanceStats)
+					}
 					return errors.Errorf(
 						"%ds elapsed without changes, but replica count standard "+
 							"deviation is %.2f (>%.2f)", stats.SecondsSinceLastEvent,
 						stats.ReplicaCountStdDev, maxStdDev)
 				}
-				return printRebalanceStats(l, db)
+				return nil
 			}
 			statsTimer.Reset(statsInterval)
 		}
 	}
+
 }
 
 func runWideReplication(ctx context.Context, t test.Test, c cluster.Cluster) {
