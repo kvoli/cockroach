@@ -650,6 +650,64 @@ func (g *zipfGenerator) sequence() int64 {
 	return atomic.LoadInt64(&g.seq.val)
 }
 
+// Outline
+// constraints
+// 
+// 	read(x) must occur in some chain write(x), ..., read(x)
+//  read(x) and write(x) are drawn from the next seq
+//
+// functions
+//  Z(x) -> x: map an integer to an integer with P(x) according to the zipf distribution
+//  R(x) -> x: map an integer to an integer, such that |R(x)| = 1 at most one value maps to each value.
+// 
+// sketch:
+//  maintain a mapping x -> y, of size N, where N is the number of distinct writes in the run. 
+//  this mapping is a mapping from key to popularity.
+//  
+//  ma:write-write-err
+type movingHotKeyGenerator struct {
+	seq    *sequence
+	random *rand.Rand
+	zipf   *zipf
+	mapping map[int]int
+	offset int
+}
+
+// Creates a new zipfian generator.
+func newMovingHotkeyGenerator(seq *sequence) *zipfGenerator {
+	random := rand.New(rand.NewSource(timeutil.Now().UnixNano()))
+	return &zipfGenerator{
+		seq:    seq,
+		random: random,
+		zipf:   newZipf(1.1, 1, uint64(math.MaxInt64)),
+	}
+}
+
+func (g *movingHotKeyGenerator) zipfian(seed int64) int64 {
+	randomWithSeed := rand.New(rand.NewSource(seed))
+	return int64(g.zipf.Uint64(randomWithSeed))
+}
+
+func (g *movingHotKeyGenerator) writeKey() int64 {
+	return g.zipfian(g.seq.write())
+}
+
+func (g *movingHotKeyGenerator) readKey() int64 {
+	v := g.seq.read()
+	if v == 0 {
+		return 0
+	}
+	return g.zipfian(g.random.Int63n(v))
+}
+
+func (g *movingHotKeyGenerator) rand() *rand.Rand {
+	return g.random
+}
+
+func (g *movingHotKeyGenerator) sequence() int64 {
+	return atomic.LoadInt64(&g.seq.val)
+}
+
 func randomBlock(config *kv, r *rand.Rand) []byte {
 	blockSize := r.Intn(config.maxBlockSizeBytes-config.minBlockSizeBytes+1) + config.minBlockSizeBytes
 	blockData := make([]byte, blockSize)
