@@ -152,6 +152,13 @@ var (
 		10*time.Second,
 		settings.NonNegativeDurationWithMaximum(maxGraphiteInterval),
 	).WithPublic()
+	StoreGossipInterval = settings.RegisterPublicDurationSettingWithExplicitUnit(
+		settings.SystemOnly,
+		"gossip.stores.interval",
+		"interval at which stores will gossip their current store descriptor",
+		60*time.Second,
+		settings.NonNegativeDurationWithMaximum(time.Second*120),
+	).WithPublic()
 )
 
 type nodeMetrics struct {
@@ -702,7 +709,7 @@ func (n *Node) startGossiping(ctx context.Context, stopper *stop.Stopper) {
 		// it can.
 
 		statusTicker := time.NewTicker(gossipStatusInterval)
-		storesTicker := time.NewTicker(gossip.StoresInterval)
+		storesTicker := time.NewTicker(StoreGossipInterval.Get(&n.storeCfg.Settings.SV))
 		nodeTicker := time.NewTicker(gossip.NodeDescriptorInterval)
 		defer func() {
 			nodeTicker.Stop()
@@ -716,6 +723,12 @@ func (n *Node) startGossiping(ctx context.Context, stopper *stop.Stopper) {
 			case <-statusTicker.C:
 				n.storeCfg.Gossip.LogStatus()
 			case <-storesTicker.C:
+				storesTicker.Reset(StoreGossipInterval.Get(&n.storeCfg.Settings.SV))
+				log.Infof(
+					ctx,
+					"gossiped store update and reset store gossip interval to %s",
+					StoreGossipInterval.Get(&n.storeCfg.Settings.SV),
+				)
 				n.gossipStores(ctx)
 			case <-nodeTicker.C:
 				if err := n.storeCfg.Gossip.SetNodeDescriptor(&n.Descriptor); err != nil {

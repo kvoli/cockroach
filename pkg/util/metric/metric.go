@@ -27,7 +27,7 @@ import (
 const (
 	// MaxLatency is the maximum value tracked in latency histograms. Higher
 	// values will be recorded as this value instead.
-	MaxLatency = 10 * time.Second
+	MaxLatency = 120 * time.Second
 
 	// TestSampleInterval is passed to histograms during tests which don't
 	// want to concern themselves with supplying a "correct" interval.

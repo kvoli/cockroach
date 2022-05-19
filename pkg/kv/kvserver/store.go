@@ -1811,6 +1811,10 @@ func (s *Store) Start(ctx context.Context, stopper *stop.Stopper) error {
 		logSetter.SetStoreID(ctx, int32(s.StoreID()))
 	}
 
+	s.allocator.StorePool.DetailsMu.Lock()
+	s.allocator.StorePool.DetailsMu.LocalID = s.StoreID()
+	s.allocator.StorePool.DetailsMu.Unlock()
+
 	// Add the store ID to the scanner's AmbientContext before starting it, since
 	// the AmbientContext provided during construction did not include it.
 	// Note that this is just a hacky way of getting around that without
@@ -2507,6 +2511,7 @@ func (s *Store) asyncGossipStore(ctx context.Context, reason string, useCached b
 	if err := s.stopper.RunAsyncTask(
 		ctx, fmt.Sprintf("storage.Store: gossip on %s", reason),
 		func(ctx context.Context) {
+			log.Infof(ctx, "gossiping store due to %s", reason)
 			if err := s.GossipStore(ctx, useCached); err != nil {
 				log.Warningf(ctx, "error gossiping on %s: %+v", reason, err)
 			}
@@ -2528,6 +2533,8 @@ func (s *Store) GossipStore(ctx context.Context, useCached bool) error {
 	// recursively triggering a gossip of the store capacity.
 	syncutil.StoreFloat64(&s.gossipQueriesPerSecondVal, -1)
 	syncutil.StoreFloat64(&s.gossipWritesPerSecondVal, -1)
+
+	s.Metrics().GossipStoreEvents.Inc(1)
 
 	storeDesc, err := s.Descriptor(ctx, useCached)
 	if err != nil {
@@ -2572,15 +2579,20 @@ func (s *Store) maybeGossipOnCapacityChange(ctx context.Context, cce capacityCha
 	// Incrementally adjust stats to keep them up to date even if the
 	// capacity is gossiped, but isn't due yet to be recomputed from scratch.
 	s.cachedCapacity.Lock()
+	message := ""
 	switch cce {
 	case rangeAddEvent:
 		s.cachedCapacity.RangeCount++
+		message = "rangeAddEvent"
 	case rangeRemoveEvent:
 		s.cachedCapacity.RangeCount--
+		message = "rangeRemoveEvent"
 	case leaseAddEvent:
 		s.cachedCapacity.LeaseCount++
+		message = "leaseAddEvent"
 	case leaseRemoveEvent:
 		s.cachedCapacity.LeaseCount--
+		message = "leaseRemoveEvent"
 	}
 	s.cachedCapacity.Unlock()
 
@@ -2589,7 +2601,19 @@ func (s *Store) maybeGossipOnCapacityChange(ctx context.Context, cce capacityCha
 		// Reset countdowns to avoid unnecessary gossiping.
 		atomic.StoreInt32(&s.gossipRangeCountdown, 0)
 		atomic.StoreInt32(&s.gossipLeaseCountdown, 0)
-		s.asyncGossipStore(ctx, "capacity change", true /* useCached */)
+
+		switch message {
+		case "rangeAddEvent":
+			s.Metrics().GossipRangeAddEvents.Inc(1)
+		case "rangeRemoveEvent":
+			s.Metrics().GossipRangeRemoveEvents.Inc(1)
+		case "leaseAddEvent":
+			s.Metrics().GossipLeaseAddEvents.Inc(1)
+		case "leaseRemoveEvent":
+			s.Metrics().GossipLeaseRemoveEvents.Inc(1)
+		}
+
+		s.asyncGossipStore(ctx, fmt.Sprintf("capacity change %s", message), true /* useCached */)
 	}
 }
 
@@ -3013,6 +3037,9 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	}
 	capacity.BytesPerReplica = roachpb.PercentilesFromData(bytesPerReplica)
 	capacity.WritesPerReplica = roachpb.PercentilesFromData(writesPerReplica)
+	capacity.SourceCreationTime = now.ToTimestamp()
+	s.metrics.GossipCapacityEvents.Inc(1)
+
 	s.recordNewPerSecondStats(totalQueriesPerSecond, totalWritesPerSecond)
 	s.replRankings.update(rankingsAccumulator)
 

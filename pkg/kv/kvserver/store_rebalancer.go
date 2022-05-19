@@ -206,6 +206,8 @@ func (sr *StoreRebalancer) rebalanceStore(
 	ctx context.Context, mode LBRebalancingMode, allStoresList storepool.StoreList,
 ) {
 	options := sr.scorerOptions(ctx)
+	sr.rq.store.allocator.RecordStaleness(allStoresList.Stores...)
+
 	var localDesc *roachpb.StoreDescriptor
 	for i := range allStoresList.Stores {
 		if allStoresList.Stores[i].StoreID == sr.rq.store.StoreID() {

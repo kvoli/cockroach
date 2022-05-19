@@ -423,6 +423,18 @@ var (
 		Measurement: "Attempts",
 		Unit:        metric.Unit_COUNT,
 	}
+	metaDataOtherStaleness = metric.Metadata{
+		Name:        "kv.allocator.staleness.other",
+		Help:        "Staleness of data from other nodes that allocation decisions were made with",
+		Measurement: "Elapsed time since creation",
+		Unit:        metric.Unit_NANOSECONDS,
+	}
+	metaDataOwnStaleness = metric.Metadata{
+		Name:        "kv.allocator.staleness.own",
+		Help:        "Staleness of data from the local node that allocation decisions were made with",
+		Measurement: "Elapsed time since creation",
+		Unit:        metric.Unit_NANOSECONDS,
+	}
 )
 
 type loadBasedLeaseTransferMetrics struct {
@@ -439,6 +451,8 @@ type loadBasedReplicaRebalanceMetrics struct {
 	DeltaNotSignificant          *metric.Counter
 	MissingStatsForExistingStore *metric.Counter
 	ShouldRebalance              *metric.Counter
+	OwnStaleness                 *metric.Histogram
+	OtherStaleness               *metric.Histogram
 }
 
 // AllocatorMetrics capture metrics about the allocator's decisions.
@@ -475,6 +489,8 @@ func makeAllocatorMetrics() AllocatorMetrics {
 			DeltaNotSignificant:          metric.NewCounter(metaLBReplicaRebalancingDeltaNotSignificant),
 			MissingStatsForExistingStore: metric.NewCounter(metaLBReplicaRebalancingMissingStatsForExistingStore),
 			ShouldRebalance:              metric.NewCounter(metaLBReplicaRebalancingShouldTransfer),
+			OwnStaleness:                 metric.NewLatency(metaDataOwnStaleness, 10*time.Minute),
+			OtherStaleness:               metric.NewLatency(metaDataOtherStaleness, 10*time.Minute),
 		},
 	}
 }
@@ -949,6 +965,8 @@ func (a *Allocator) AllocateTargetFromList(
 		log.Fatalf(ctx, "unsupported targetReplicaType: %v", t)
 	}
 
+	a.RecordStaleness(candidateStores.Stores...)
+
 	// We'll consider the targets that have a non-voter as feasible
 	// relocation/up-replication targets for existing/new voting replicas, since
 	// we always want voter constraint conformance to take precedence over
@@ -1076,6 +1094,8 @@ func (a Allocator) RemoveTarget(
 	analyzedVoterConstraints := constraint.AnalyzeConstraints(ctx, a.StorePool.GetStoreDescriptor,
 		existingVoters, conf.GetNumVoters(), conf.VoterConstraints)
 
+	a.RecordStaleness(candidateStoreList.Stores...)
+
 	var constraintsChecker constraintsCheckFn
 	switch t := targetType; t {
 	case VoterTarget:
@@ -1195,6 +1215,7 @@ func (a Allocator) RebalanceTarget(
 	options ScorerOptions,
 ) (add, remove roachpb.ReplicationTarget, details string, ok bool) {
 	sl, _, _ := a.StorePool.GetStoreList(filter)
+	a.RecordStaleness(sl.Stores...)
 
 	// If we're considering a rebalance due to an `AdminScatterRequest`, we'd like
 	// to ensure that we're returning a random rebalance target to a new store
@@ -1647,6 +1668,8 @@ func (a *Allocator) TransferLeaseTarget(
 		log.VEventf(ctx, 2, "no lease transfer target found for r%d", leaseRepl.GetRangeID())
 		return roachpb.ReplicaDescriptor{}
 	}
+
+	a.RecordStaleness(sl.Stores...)
 
 	switch g := opts.Goal; g {
 	case allocator.FollowTheWorkload:
@@ -2190,6 +2213,25 @@ func (a Allocator) PreferredLeaseholders(
 		}
 	}
 	return nil
+}
+
+func (a Allocator) RecordStaleness(descriptors ...roachpb.StoreDescriptor) {
+	now := a.StorePool.Clock.Now().GoTime()
+	a.StorePool.DetailsMu.RLocker().Lock()
+	defer a.StorePool.DetailsMu.RLocker().Unlock()
+	n := len(descriptors)
+
+	for i := 0; i < n; i++ {
+		desc := descriptors[i]
+		if (desc.Capacity != roachpb.StoreCapacity{} && desc.Capacity.SourceCreationTime.IsSet()) {
+			delta := now.Sub(desc.Capacity.SourceCreationTime.GoTime())
+			if desc.StoreID == a.StorePool.DetailsMu.LocalID {
+				a.Metrics.LoadBasedReplicaRebalanceMetrics.OwnStaleness.RecordValue(delta.Nanoseconds())
+			} else {
+				a.Metrics.LoadBasedReplicaRebalanceMetrics.OtherStaleness.RecordValue(delta.Nanoseconds())
+			}
+		}
+	}
 }
 
 // computeQuorum computes the quorum value for the given number of nodes.

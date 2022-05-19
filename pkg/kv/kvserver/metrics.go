@@ -284,6 +284,43 @@ var (
 		Unit:        metric.Unit_BYTES,
 	}
 
+	metaCapacityCalls = metric.Metadata{
+		Name:        "gossip.capacity",
+		Help:        "Number of calls to store capacity",
+		Measurement: "Events",
+		Unit:        metric.Unit_COUNT,
+	}
+	metaGossipStoreEvents = metric.Metadata{
+		Name:        "gossip.events",
+		Help:        "Number of gossip events",
+		Measurement: "Events",
+		Unit:        metric.Unit_COUNT,
+	}
+	metaGossipLeaseAddEvents = metric.Metadata{
+		Name:        "gossip.leaseaddevent",
+		Help:        "Number of lease add events",
+		Measurement: "Events",
+		Unit:        metric.Unit_COUNT,
+	}
+	metaGossipLeaseRemoveEvents = metric.Metadata{
+		Name:        "gossip.leaseremoveevent",
+		Help:        "Number of lease remove events",
+		Measurement: "Events",
+		Unit:        metric.Unit_COUNT,
+	}
+	metaGossipRangeAddEvents = metric.Metadata{
+		Name:        "gossip.rangeaddevent",
+		Help:        "Number of range remove events",
+		Measurement: "Events",
+		Unit:        metric.Unit_COUNT,
+	}
+	metaGossipRangeRemoveEvents = metric.Metadata{
+		Name:        "gossip.rangeremoveevent",
+		Help:        "Number of range remove events",
+		Measurement: "Events",
+		Unit:        metric.Unit_COUNT,
+	}
+
 	// Metrics used by the rebalancing logic that aren't already captured elsewhere.
 	metaAverageQueriesPerSecond = metric.Metadata{
 		Name:        "rebalancing.queriespersecond",
@@ -1693,6 +1730,13 @@ type StoreMetrics struct {
 	AddSSTableProposalTotalDelay  *metric.Counter
 	AddSSTableProposalEngineDelay *metric.Counter
 
+	GossipLeaseAddEvents    *metric.Counter
+	GossipLeaseRemoveEvents *metric.Counter
+	GossipRangeAddEvents    *metric.Counter
+	GossipRangeRemoveEvents *metric.Counter
+	GossipStoreEvents       *metric.Counter
+	GossipCapacityEvents    *metric.Counter
+
 	// Export request stats.
 	ExportRequestProposalTotalDelay *metric.Counter
 
@@ -2026,6 +2070,13 @@ func newStoreMetrics(histogramWindow time.Duration) *StoreMetrics {
 		// Disk health metrics.
 		DiskSlow:    metric.NewGauge(metaDiskSlow),
 		DiskStalled: metric.NewGauge(metaDiskStalled),
+
+		GossipStoreEvents:       metric.NewCounter(metaGossipStoreEvents),
+		GossipCapacityEvents:    metric.NewCounter(metaCapacityCalls),
+		GossipLeaseAddEvents:    metric.NewCounter(metaGossipLeaseAddEvents),
+		GossipLeaseRemoveEvents: metric.NewCounter(metaGossipLeaseRemoveEvents),
+		GossipRangeAddEvents:    metric.NewCounter(metaGossipRangeAddEvents),
+		GossipRangeRemoveEvents: metric.NewCounter(metaGossipRangeRemoveEvents),
 
 		// Range event metrics.
 		RangeSplits:                   metric.NewCounter(metaRangeSplits),

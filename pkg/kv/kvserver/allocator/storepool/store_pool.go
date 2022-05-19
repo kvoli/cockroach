@@ -338,8 +338,9 @@ type StorePool struct {
 	log.AmbientContext
 	St *cluster.Settings // TODO(irfansharif): Shouldn't need to be exported.
 
-	Clock          *hlc.Clock
-	Gossip         *gossip.Gossip // TODO(irfansharif): Shouldn't need to be exported.
+	Clock  *hlc.Clock
+	Gossip *gossip.Gossip // TODO(irfansharif): Shouldn't need to be exported.
+
 	nodeCountFn    NodeCountFunc
 	NodeLivenessFn NodeLivenessFunc
 	startTime      time.Time
@@ -350,6 +351,7 @@ type StorePool struct {
 	// storeDetails.
 	DetailsMu struct {
 		syncutil.RWMutex
+		LocalID      roachpb.StoreID
 		StoreDetails map[roachpb.StoreID]*StoreDetail
 	}
 	localitiesMu struct {
