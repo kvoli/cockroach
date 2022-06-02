@@ -1,0 +1,18 @@
+digraph G {
+    DB_AdminTransferLease -> r_AdminTransferLease;
+    rq_transferLease -> r_AdminTransferLease;
+    rq_adminScatter -> r_AdminTransferLease;
+    r_AdminRelocateRange -> DB_AdminTransferLease;
+    r_maybeTransferLeaseDuringLeaveJoint -> DB_AdminTransferLease;
+    rq_changeReplicas -> r_AdminChangeReplicas;
+    DB_AdminChangeReplicas -> r_AdminChangeReplicas;
+    r_AdminRelocateRange -> DB_AdminChangeReplicas;
+    DB_AdminRelocateRange -> r_AdminRelocateRange;
+    sr_rebalanceStore  -> DB_AdminRelocateRange;
+    r_maybeLeaveAtomicChangeReplicasAndRemoveLearners -> r_maybeTransferLeaseDuringLeaveJoint;
+    r_AdminChangeReplicas -> r_maybeTransferLeaseDuringLeaveJoint;
+    r_AdminChangeReplicas -> r_maybeLeaveAtomicChangeReplicasAndRemoveLearners;
+    r_AdminRelocateRange -> r_maybeLeaveAtomicChangeReplicasAndRemoveLearners;
+    rq_processOneChange -> r_maybeLeaveAtomicChangeReplicasAndRemoveLearners;
+}
+
