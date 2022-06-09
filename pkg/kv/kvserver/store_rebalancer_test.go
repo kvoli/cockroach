@@ -824,7 +824,7 @@ func TestChooseRangeToRebalanceRandom(t *testing.T) {
 				},
 			)
 			hottestRanges := rr.topQPS()
-			_, voterTargets, nonVoterTargets := sr.chooseRangeToRebalance(
+			_, voterTargets, nonVoterTargets, _ := sr.chooseRangeToRebalance(
 				ctx,
 				&hottestRanges,
 				&localDesc,
@@ -1089,7 +1089,7 @@ func TestChooseRangeToRebalanceAcrossHeterogeneousZones(t *testing.T) {
 				},
 			)
 			hottestRanges := rr.topQPS()
-			_, voterTargets, nonVoterTargets := sr.chooseRangeToRebalance(
+			_, voterTargets, nonVoterTargets, _ := sr.chooseRangeToRebalance(
 				ctx,
 				&hottestRanges,
 				&localDesc,
@@ -1330,7 +1330,7 @@ func TestChooseRangeToRebalanceOffHotNodes(t *testing.T) {
 			s.cfg.DefaultSpanConfig.NumReplicas = int32(len(tc.voters))
 			loadRanges(rr, s, []testRange{{voters: tc.voters, qps: tc.QPS}})
 			hottestRanges := rr.topQPS()
-			_, voterTargets, _ := sr.chooseRangeToRebalance(
+			_, voterTargets, _, _ := sr.chooseRangeToRebalance(
 				ctx,
 				&hottestRanges,
 				&localDesc,
@@ -1435,7 +1435,7 @@ func TestNoLeaseTransferToBehindReplicas(t *testing.T) {
 	hottestRanges = rr.topQPS()
 	repl = hottestRanges[0].repl
 
-	_, targets, _ := sr.chooseRangeToRebalance(
+	_, targets, _, _ := sr.chooseRangeToRebalance(
 		ctx,
 		&hottestRanges,
 		&localDesc,
@@ -1603,7 +1603,7 @@ func TestStoreRebalancerReadAmpCheck(t *testing.T) {
 			loadRanges(rr, s, []testRange{{voters: []roachpb.StoreID{1, 3, 5}, qps: 100}})
 			hottestRanges := rr.topQPS()
 
-			_, targetVoters, _ := sr.chooseRangeToRebalance(
+			_, targetVoters, _, _ := sr.chooseRangeToRebalance(
 				ctx,
 				&hottestRanges,
 				&localDesc,
