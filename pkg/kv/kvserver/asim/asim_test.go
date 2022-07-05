@@ -149,3 +149,81 @@ func TestAllocatorSimulatorSpeed(t *testing.T) {
 	fmt.Println(time.Duration(minRunTime).Seconds())
 	require.Less(t, minRunTime, requiredRunTime)
 }
+
+func TestSimulatorExam(t *testing.T) {
+	ctx := context.Background()
+	start := state.TestingStartTime()
+	settings := asim.DefaultSimulationSettings()
+
+	// halfDistribution := func(stores int) []float64 {
+	// 	replicaDistribution := make([]float64, stores)
+	// 	for i := 0; i < stores/2; i++ {
+	// 		replicaDistribution[i] = 1.0 / float64(stores/2)
+	// 	}
+	// 	for i := stores / 2; i < stores; i++ {
+	// 		replicaDistribution[i] = 0
+	// 	}
+	// 	return replicaDistribution
+	// }
+	//
+	minDistribution := func(stores, replication int) []float64 {
+		replicaDistribution := make([]float64, stores)
+		for i := 0; i < replication && i < stores; i++ {
+			replicaDistribution[i] = 1.0 / float64(replication)
+		}
+		return replicaDistribution
+	}
+
+	testCases := []struct {
+		desc         string
+		stores       int
+		ranges       int
+		replication  int
+		distribution []float64
+		length       time.Duration
+	}{
+		// {
+		// 	desc:         "n321hr3rf-halfrepls",
+		// 	stores:       32,
+		// 	replication:  3,
+		// 	ranges:       10000,
+		// 	distribution: halfDistribution(32),
+		// 	length:       60 * time.Minute,
+		// },
+		{
+			desc:         "n641hr3r-3repls",
+			stores:       64,
+			replication:  3,
+			ranges:       20000,
+			distribution: minDistribution(64, 3),
+			length:       60 * time.Minute,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			end := start.Add(tc.length)
+			interval := 10 * time.Second
+			preGossipStart := start.Add(-settings.StateExchangeInterval - settings.StateExchangeDelay)
+
+			sample := func() int64 {
+				rwg := make([]workload.Generator, 1)
+				rwg[0] = testCreateWorkloadGenerator(start, tc.stores, int64(tc.ranges))
+				exchange := state.NewFixedDelayExhange(preGossipStart, settings.StateExchangeInterval, settings.StateExchangeDelay)
+				changer := state.NewReplicaChanger()
+				m := asim.NewMetricsTracker(os.Stdout)
+
+				s := state.NewTestStateReplDistribution(tc.ranges, tc.distribution, tc.replication)
+				testPreGossipStores(s, exchange, preGossipStart)
+				sim := asim.NewSimulator(start, end, interval, rwg, s, exchange, changer, settings, m)
+
+				startTime := timeutil.Now()
+				sim.RunSim(ctx)
+				return timeutil.Since(startTime).Nanoseconds()
+			}
+
+			wallRuntime := sample()
+			fmt.Printf("%s: %fs", tc.desc, time.Duration(wallRuntime).Seconds())
+		})
+	}
+}
