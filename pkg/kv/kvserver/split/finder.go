@@ -12,7 +12,10 @@ package split
 
 import (
 	"bytes"
+	"fmt"
 	"math"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -46,10 +49,14 @@ const (
 	// RecordDurationThreshold is the minimum duration of time the split finder
 	// will record a range for, before being ready for a split.
 	RecordDurationThreshold    = 10 * time.Second // 10s
-	splitKeySampleSize         = 20               // size of split key sample
 	splitKeyMinCounter         = 100              // min aggregate counters before consideration
 	splitKeyThreshold          = 0.25             // 25% difference between left/right counters
 	splitKeyContainedThreshold = 0.50             // too many spanning queries over split point
+)
+
+var (
+	// Not planning on merging this, for example mostly.
+	splitKeySampleSize = 10 // size of split key sample
 )
 
 type sample struct {
@@ -61,7 +68,7 @@ type sample struct {
 // using the Reservoir Sampling method.
 type Finder struct {
 	startTime time.Time
-	samples   [splitKeySampleSize]sample
+	samples   []sample
 	count     int
 }
 
@@ -69,6 +76,7 @@ type Finder struct {
 func NewFinder(startTime time.Time) *Finder {
 	return &Finder{
 		startTime: startTime,
+		samples:   make([]sample, splitKeySampleSize),
 	}
 }
 
@@ -91,9 +99,18 @@ func (f *Finder) Record(span roachpb.Span, intNFn func(int) int) {
 	if count < splitKeySampleSize {
 		idx = count
 	} else if idx = intNFn(count); idx >= splitKeySampleSize {
-		// Increment all existing keys' counters.
+		// Increment all existing keys' counters e.g.
+		// sample_key | record_span |   incr
+		// -------------------------|-----------
+		//     c      |    b-d      | contained
+		//     c      |    c-c      |   right
+		//     c      |    c-d      |   right
+		//     c      |    b-c      |   left
+		//     c      |    a-b      |   left
 		for i := range f.samples {
 			if span.ProperlyContainsKey(f.samples[i].key) {
+				// If the split is chosen to be here, we know that the request
+				// would span across the split.
 				f.samples[i].contained++
 			} else {
 				// If the split is chosen to be here and the key is on or to the left
@@ -148,4 +165,26 @@ func (f *Finder) Key() roachpb.Key {
 		return nil
 	}
 	return f.samples[bestIdx].key
+}
+
+func (f *Finder) String() string {
+	samples := f.samples[:]
+	sort.Slice(samples, func(i, j int) bool {
+		return samples[i].key.Compare(samples[j].key) < 0
+	})
+
+	bbuf := strings.Builder{}
+	_, _ = bbuf.WriteString("(l-r)/(l+r)\n")
+
+	for _, s := range samples {
+		_, _ = bbuf.WriteString(fmt.Sprintf("%s | ", s.key.String()))
+		balanceScore := int((1.0 - (math.Abs(float64(s.left-s.right)) / float64(s.left+s.right))) * 10)
+
+		for i := 0; i < balanceScore; i++ {
+			_, _ = bbuf.WriteString("x")
+		}
+
+		_, _ = bbuf.WriteString("\n")
+	}
+	return bbuf.String()
 }

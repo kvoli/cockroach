@@ -11,263 +11,216 @@
 package split
 
 import (
-	"bytes"
-	"context"
-	"reflect"
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
-	"github.com/cockroachdb/cockroach/pkg/util/leaktest"
-	"github.com/cockroachdb/cockroach/pkg/util/stop"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"golang.org/x/exp/rand"
 )
 
-// TestSplitFinderKey verifies the Key() method correctly
-// finds an appropriate split point for the range.
-func TestSplitFinderKey(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	stopper := stop.NewStopper()
-	defer stopper.Stop(context.Background())
+// TestSplitFinderDistributions searches for the number of samples required in
+// the finder to select a split key with X%(35) accuracy of the optimal.
+//
+// ./dev test pkg/kv/kvserver/split -f TestSplitFinderDistribution -v --show-logs
+//  === RUN   TestSplitFinderDistributions/span=95/length=uniform/access=zipf
+//     finder_test.go:142: sample_size=10 suggested=-1, optimal=528, penalty(/100)=100.00
+//     finder_test.go:142: sample_size=20 suggested=-1, optimal=528, penalty(/100)=100.00
+//     finder_test.go:149: sample_size=40 suggested=675, optimal=532, penalty(/100)=9.44
+// === RUN   TestSplitFinderDistributions/span=50/length=zipf/access=zipf
+//     finder_test.go:149: sample_size=10 suggested=79, optimal=421, penalty(/100)=35.12
+//     finder_test.go:149: sample_size=20 suggested=63, optimal=403, penalty(/100)=36.61
+//     finder_test.go:149: sample_size=40 suggested=69, optimal=402, penalty(/100)=36.03
+//     finder_test.go:149: sample_size=80 suggested=79, optimal=389, penalty(/100)=34.05
+// === RUN   TestSplitFinderDistributions/span=50/length=uniform/access=zipf
+//     finder_test.go:149: sample_size=10 suggested=110, optimal=528, penalty(/100)=39.33
+//     finder_test.go:149: sample_size=20 suggested=132, optimal=532, penalty(/100)=37.06
+//     finder_test.go:149: sample_size=40 suggested=209, optimal=528, penalty(/100)=28.94
+// === RUN   TestSplitFinderDistributions/span=0/length=uniform/access=zipf
+//     finder_test.go:149: sample_size=10 suggested=32, optimal=42, penalty(/100)=2.49
+// === RUN   TestSplitFinderDistributions/span=95/length=uniform/access=uniform
+//     finder_test.go:149: sample_size=10 suggested=50779, optimal=50535, penalty(/100)=0.27
+func TestSplitFinderDistributions(t *testing.T) {
+	const testingSeed = uint64(2400)
+	const testingRecords = 25000
 
-	const ReservoirKeyOffset = 1000
-
-	// Test an empty reservoir (reservoir without load).
-	basicReservoir := [splitKeySampleSize]sample{}
-
-	// Test reservoir with no load should have no splits.
-	noLoadReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      0,
-			right:     0,
-			contained: 0,
+	makeSpan := func(startKey, length uint64) roachpb.Span {
+		spanStartKey := uint32(startKey)
+		spanEndKey := spanStartKey + uint32(length)
+		return roachpb.Span{
+			Key:    keys.SystemSQLCodec.TablePrefix(spanStartKey),
+			EndKey: keys.SystemSQLCodec.TablePrefix(spanEndKey),
 		}
-		noLoadReservoir[i] = tempSample
 	}
 
-	// Test a uniform reservoir.
-	uniformReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      splitKeyMinCounter,
-			right:     splitKeyMinCounter,
-			contained: 0,
-		}
-		uniformReservoir[i] = tempSample
+	intN := func(seed uint64) func(int) int {
+		return rand.New(rand.NewSource(seed)).Intn
 	}
 
-	// Testing a non-uniform reservoir.
-	nonUniformReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      splitKeyMinCounter * i,
-			right:     splitKeyMinCounter * (splitKeySampleSize - i),
-			contained: 0,
+	spanBool := func(seed uint64, percent float64) func() bool {
+		gen := rand.New(rand.NewSource(seed))
+		return func() bool {
+			return gen.Float64() < percent
 		}
-		nonUniformReservoir[i] = tempSample
 	}
 
-	// Test a load heavy reservoir on a single hot key (the last key).
-	singleHotKeyReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      0,
-			right:     splitKeyMinCounter,
-			contained: 0,
+	uniformInt := func(seed, min, max uint64) func() uint64 {
+		gen := rand.New(rand.NewSource(seed))
+		return func() uint64 {
+			return gen.Uint64n(max-min+1) + min
 		}
-		singleHotKeyReservoir[i] = tempSample
 	}
 
-	// Test a load heavy reservoir on multiple hot keys (first and last key).
-	multipleHotKeysReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      splitKeyMinCounter,
-			right:     splitKeyMinCounter,
-			contained: 0,
+	zipfInt := func(seed, min, max uint64, theta float64) func() uint64 {
+		gen := rand.NewZipf(rand.New(rand.NewSource(seed)), 1.1, 1, max-min)
+		return func() uint64 {
+			return gen.Uint64() + min
 		}
-		multipleHotKeysReservoir[i] = tempSample
 	}
-	multipleHotKeysReservoir[0].left = 0
-
-	// Test a spanning reservoir where splits shouldn't occur.
-	spanningReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      0,
-			right:     0,
-			contained: splitKeyMinCounter,
-		}
-		spanningReservoir[i] = tempSample
-	}
-
-	// Test that splits happen between two heavy spans.
-	multipleSpanReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      splitKeyMinCounter,
-			right:     splitKeyMinCounter,
-			contained: splitKeyMinCounter,
-		}
-		multipleSpanReservoir[i] = tempSample
-	}
-	midSample := sample{
-		key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + splitKeySampleSize/2)),
-		left:      splitKeyMinCounter,
-		right:     splitKeyMinCounter,
-		contained: 0,
-	}
-	multipleSpanReservoir[splitKeySampleSize/2] = midSample
 
 	testCases := []struct {
-		reservoir      [splitKeySampleSize]sample
-		splitByLoadKey roachpb.Key
+		desc string
+		// randGenerator
+		span         func() bool
+		length       func() uint64
+		access       func() uint64
+		expectSplit  bool
+		records, rng int
 	}{
-		// Test an empty reservoir.
-		{basicReservoir, nil},
-		// Test reservoir with no load should have no splits.
-		{noLoadReservoir, nil},
-		// Test a uniform reservoir (Splits at the first key)
-		{uniformReservoir, keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset)},
-		// Testing a non-uniform reservoir.
-		{nonUniformReservoir, keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + splitKeySampleSize/2)},
-		// Test a load heavy reservoir on a single hot key. Splitting can't help here.
-		{singleHotKeyReservoir, nil},
-		// Test a load heavy reservoir on multiple hot keys. Splits between the hot keys.
-		{multipleHotKeysReservoir, keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + 1)},
-		// Test a spanning reservoir. Splitting will be bad here. Should avoid it.
-		{spanningReservoir, nil},
-		// Test that splits happen between two heavy spans.
-		{multipleSpanReservoir, keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + splitKeySampleSize/2)},
+		{
+			desc:        "span=95/length=uniform/access=zipf",
+			span:        spanBool(testingSeed, 0.95),
+			length:      uniformInt(testingSeed+1, 1, 1000),
+			access:      zipfInt(testingSeed+2, 0, 100000, 0.99),
+			expectSplit: true,
+			rng:         110000,
+		},
+		{
+			desc:        "span=50/length=zipf/access=zipf",
+			span:        spanBool(testingSeed, 0.50),
+			length:      zipfInt(testingSeed+2, 0, 1000, 0.99),
+			access:      zipfInt(testingSeed+2, 0, 100000, 0.99),
+			expectSplit: true,
+			rng:         110000,
+		},
+		{
+			desc:        "span=50/length=uniform/access=zipf",
+			span:        spanBool(testingSeed, 0.50),
+			length:      uniformInt(testingSeed+1, 1, 1000),
+			access:      zipfInt(testingSeed+2, 0, 100000, 0.99),
+			expectSplit: true,
+			rng:         110000,
+		},
+		{
+			desc:        "span=0/length=uniform/access=zipf",
+			span:        spanBool(testingSeed, 0),
+			length:      uniformInt(testingSeed+1, 1, 1000),
+			access:      zipfInt(testingSeed+2, 0, 100000, 0.99),
+			expectSplit: true,
+			rng:         110000,
+		},
+		{
+			desc:        "span=95/length=uniform/access=uniform",
+			span:        spanBool(testingSeed, 0.95),
+			length:      uniformInt(testingSeed+1, 1, 1000),
+			access:      uniformInt(testingSeed+2, 0, 100000),
+			expectSplit: true,
+			rng:         110000,
+		},
 	}
 
-	for i, test := range testCases {
-		finder := NewFinder(timeutil.Now())
-		finder.samples = test.reservoir
-		if splitByLoadKey := finder.Key(); !bytes.Equal(splitByLoadKey, test.splitByLoadKey) {
-			t.Errorf(
-				"%d: expected splitByLoadKey: %v, but got splitByLoadKey: %v",
-				i, test.splitByLoadKey, splitByLoadKey)
-		}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			if tc.records == 0 {
+				tc.records = testingRecords
+			}
+
+			run := func(sampleSize int) float64 {
+				r := newRecorder(tc.rng)
+				splitKeySampleSize = sampleSize
+				finder := NewFinder(timeutil.Now())
+				intNFn := intN(testingSeed + 1)
+
+				for i := 0; i < tc.records; i++ {
+					startKey := tc.access()
+					length := uint64(1)
+					if tc.span() {
+						length = tc.length()
+					}
+
+					r.record(startKey, startKey+length)
+					finder.Record(makeSpan(startKey, length), intNFn)
+				}
+				splitKey := finder.Key()
+				if splitKey == nil {
+					optimal, _ := r.optimal(-1)
+					t.Logf("sample_size=%d suggested=%d, optimal=%d, penalty(/100)=%0.2f", splitKeySampleSize, -1, optimal, 100.0)
+					return 1
+				}
+				_, spk, _ := keys.SystemSQLCodec.DecodeTablePrefix(splitKey)
+				suggestedSplitKey, _ := strconv.Atoi(fmt.Sprintf("%d", spk))
+				optimal, penalty := r.optimal(suggestedSplitKey)
+				penaltyRatio := (float64(penalty) / float64(r.count))
+				t.Logf("sample_size=%d suggested=%d, optimal=%d, penalty(/100)=%0.2f", splitKeySampleSize, suggestedSplitKey, optimal, penaltyRatio*100)
+				return penaltyRatio
+			}
+
+			for i := 10; run(i) > 0.35 && i < 10000; i *= 2 {
+			}
+		})
 	}
 }
 
-// TestSplitFinderRecorder verifies the Record() method correctly
-// records a span.
-func TestSplitFinderRecorder(t *testing.T) {
-	defer leaktest.AfterTest(t)()
-	stopper := stop.NewStopper()
-	defer stopper.Stop(context.Background())
+type recorder struct {
+	buckets               []int
+	begin, step, n, count int
+}
 
-	const ReservoirKeyOffset = 1000
+func newRecorder(rng int) *recorder {
+	return &recorder{
+		buckets: make([]int, rng+1),
+		step:    1,
+		n:       rng,
+	}
+}
 
-	// getLargest is an IntN function that returns the largest number possible in [0, n)
-	getLargest := func(n int) int {
-		var result int
-		if n > 0 {
-			result = n - 1
+func (r *recorder) record(start, end uint64) {
+	if start < uint64(r.begin) {
+		return
+	}
+	left := int((start - uint64(r.begin)) / uint64(r.step))
+	right := int((end - uint64(r.begin)) / uint64(r.step))
+
+	if left < 0 || right >= r.n || left > right {
+		fmt.Printf("programming error [%d,%d] (l=%d,r=%d)\n", start, end, left, right)
+		return
+	}
+
+	for i := left; i < right+1; i++ {
+		r.buckets[i]++
+		r.count++
+	}
+}
+
+func (r *recorder) optimal(key int) (int, int) {
+	sum := 0
+	penalty := 0
+	mid := 0
+	found := false
+	for i, v := range r.buckets {
+		sum += v
+		if 2*sum >= r.count && !found {
+			found = true
+			mid = i * r.step
 		}
-		return result
-	}
-
-	// getZero is an IntN function that returns 0
-	getZero := func(n int) int { return 0 }
-
-	// Test recording a key query before the reservoir is full.
-	basicReservoir := [splitKeySampleSize]sample{}
-	basicSpan := roachpb.Span{
-		Key:    keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset),
-		EndKey: keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + 1),
-	}
-	expectedBasicReservoir := [splitKeySampleSize]sample{}
-	expectedBasicReservoir[0] = sample{
-		key: basicSpan.Key,
-	}
-
-	// Test recording a key query after the reservoir is full with replacement.
-	replacementReservoir := [splitKeySampleSize]sample{}
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      0,
-			right:     0,
-			contained: 0,
+		if i >= key && !found {
+			penalty += v
 		}
-		replacementReservoir[i] = tempSample
-	}
-	replacementSpan := roachpb.Span{
-		Key:    keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + splitKeySampleSize),
-		EndKey: keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + splitKeySampleSize + 1),
-	}
-	expectedReplacementReservoir := replacementReservoir
-	expectedReplacementReservoir[0] = sample{
-		key: replacementSpan.Key,
-	}
-
-	// Test recording a key query after the reservoir is full without replacement.
-	fullReservoir := replacementReservoir
-	fullSpan := roachpb.Span{
-		Key:    keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset),
-		EndKey: keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + 1),
-	}
-	expectedFullReservoir := fullReservoir
-	for i := 0; i < splitKeySampleSize; i++ {
-		tempSample := sample{
-			key:       keys.SystemSQLCodec.TablePrefix(uint32(ReservoirKeyOffset + i)),
-			left:      1,
-			right:     0,
-			contained: 0,
-		}
-		expectedFullReservoir[i] = tempSample
-	}
-	expectedFullReservoir[0].left = 0
-	expectedFullReservoir[0].right = 1
-
-	// Test recording a spanning query.
-	spanningReservoir := replacementReservoir
-	spanningSpan := roachpb.Span{
-		Key:    keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset - 1),
-		EndKey: keys.SystemSQLCodec.TablePrefix(ReservoirKeyOffset + splitKeySampleSize + 1),
-	}
-	expectedSpanningReservoir := spanningReservoir
-	for i := 0; i < splitKeySampleSize; i++ {
-		expectedSpanningReservoir[i].contained++
-	}
-
-	testCases := []struct {
-		recordSpan        roachpb.Span
-		intNFn            func(int) int
-		currCount         int
-		currReservoir     [splitKeySampleSize]sample
-		expectedReservoir [splitKeySampleSize]sample
-	}{
-		// Test recording a key query before the reservoir is full.
-		{basicSpan, getLargest, 0, basicReservoir, expectedBasicReservoir},
-		// Test recording a key query after the reservoir is full with replacement.
-		{replacementSpan, getZero, splitKeySampleSize + 1, replacementReservoir, expectedReplacementReservoir},
-		// Test recording a key query after the reservoir is full without replacement.
-		{fullSpan, getLargest, splitKeySampleSize + 1, fullReservoir, expectedFullReservoir},
-		// Test recording a spanning query.
-		{spanningSpan, getLargest, splitKeySampleSize + 1, spanningReservoir, expectedSpanningReservoir},
-	}
-
-	for i, test := range testCases {
-		finder := NewFinder(timeutil.Now())
-		finder.samples = test.currReservoir
-		finder.count = test.currCount
-		finder.Record(test.recordSpan, test.intNFn)
-		if !reflect.DeepEqual(finder.samples, test.expectedReservoir) {
-			t.Errorf(
-				"%d: expected reservoir: %v, but got reservoir: %v",
-				i, test.expectedReservoir, finder.samples)
+		if i <= key && found {
+			penalty += v
 		}
 	}
+	return mid, penalty
 }
