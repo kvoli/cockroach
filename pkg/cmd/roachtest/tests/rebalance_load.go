@@ -12,20 +12,24 @@ package tests
 
 import (
 	"context"
-	gosql "database/sql"
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
+	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/clusterstats"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/spec"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/allocatorimpl"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/install"
 	"github.com/cockroachdb/cockroach/pkg/roachprod/logger"
+	"github.com/cockroachdb/cockroach/pkg/roachprod/prometheus"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/require"
@@ -34,12 +38,10 @@ import (
 
 func registerRebalanceLoad(r registry.Registry) {
 	// This test creates a single table for kv to use and splits the table to
-	// have one range for every node in the cluster. Because even brand new
-	// clusters start with 20+ ranges in them, the number of new ranges in kv's
-	// table is small enough that it typically won't trigger rebalancing of
-	// leases in the cluster based on lease count alone. We let kv generate a lot
-	// of load against the ranges such that we'd expect load-based rebalancing to
-	// distribute the load evenly across the nodes in the cluster.
+	// have 100 ranges for every node in the cluster. The test then asserts
+	// that replica, lease and QPS count for every store converges to within
+	// the range [underfullThreshold, overfullThreshold] for each load signal.
+	// These thresholds are taken from the defaults directly.
 	rebalanceLoadRun := func(
 		ctx context.Context,
 		t test.Test,
@@ -57,7 +59,10 @@ func registerRebalanceLoad(r registry.Registry) {
 			numStores *= c.Spec().SSDs
 			startOpts.RoachprodOpts.StoreCount = c.Spec().SSDs
 		}
-		splits := numStores - 1 // n-1 splits => n ranges => 1 lease per store
+		// There will be around 45 system ranges. Add an additional 100 per
+		// store, so that the there are enough to assert on replica/range
+		// count balance.
+		splits := numStores * 100
 		startOpts.RoachprodOpts.ExtraArgs = append(startOpts.RoachprodOpts.ExtraArgs,
 			"--vmodule=store_rebalancer=5,allocator=5,allocator_scorer=5,replicate_queue=5")
 		settings := install.MakeClusterSettings()
@@ -87,8 +92,30 @@ func registerRebalanceLoad(r registry.Registry) {
 		var m *errgroup.Group // see comment in version.go
 		m, ctx = errgroup.WithContext(ctx)
 
+		// Setup the prometheus instance and client.
+		promNode := c.Node(c.Spec().NodeCount)
+		cfg := (&prometheus.Config{}).
+			WithCluster(roachNodes.InstallNodes()).
+			WithPrometheusNode(promNode.InstallNodes()[0])
+
+		err := c.StartGrafana(ctx, t.L(), cfg)
+		require.NoError(t, err)
+
+		cleanupFunc := func() {
+			if err := c.StopGrafana(ctx, t.L(), t.ArtifactsDir()); err != nil {
+				t.L().ErrorfCtx(ctx, "Error(s) shutting down prom/grafana %s", err)
+			}
+		}
+		defer cleanupFunc()
+
+		promClient, err := clusterstats.SetupCollectorPromClient(ctx, c, t.L(), cfg)
+		require.NoError(t, err)
+
+		// Setup the stats collector for the prometheus client.
+		statCollector := clusterstats.NewStatsCollector(ctx, promClient)
+
 		// Enable us to exit out of workload early when we achieve the desired
-		// lease balance. This drastically shortens the duration of the test in the
+		// load balance. This drastically shortens the duration of the test in the
 		// common case.
 		ctx, cancel := context.WithCancel(ctx)
 
@@ -109,7 +136,7 @@ func registerRebalanceLoad(r registry.Registry) {
 		})
 
 		m.Go(func() error {
-			t.Status("checking for lease balance")
+			t.Status("checking for load balance")
 
 			db := c.Conn(ctx, t.L(), 1)
 			defer db.Close()
@@ -125,11 +152,13 @@ func registerRebalanceLoad(r registry.Registry) {
 				return err
 			}
 
+			require.NoError(t, WaitFor3XReplication(ctx, t, db))
 			for tBegin := timeutil.Now(); timeutil.Since(tBegin) <= maxDuration; {
-				if done, err := isLoadEvenlyDistributed(t.L(), db, numStores); err != nil {
+
+				if done, err := isLoadEvenlyDistributed(ctx, t.L(), statCollector); err != nil {
 					return err
 				} else if done {
-					t.Status("successfully achieved lease balance; waiting for kv to finish running")
+					t.Status("successfully balanced; waiting for kv to finish running")
 					cancel()
 					return nil
 				}
@@ -141,7 +170,7 @@ func registerRebalanceLoad(r registry.Registry) {
 				}
 			}
 
-			return fmt.Errorf("timed out before leases were evenly spread")
+			return fmt.Errorf("timed out before load was evenly spread")
 		})
 		if err := m.Wait(); err != nil {
 			t.Fatal(err)
@@ -233,71 +262,84 @@ func registerRebalanceLoad(r registry.Registry) {
 	)
 }
 
-func isLoadEvenlyDistributed(l *logger.Logger, db *gosql.DB, numStores int) (bool, error) {
-	rows, err := db.Query(
-		`select lease_holder, count(*) ` +
-			`from [show ranges from table kv.kv] ` +
-			`group by lease_holder;`)
+func collectStoreStat(
+	ctx context.Context, l *logger.Logger, statCollector clusterstats.StatCollector, query string,
+) (map[int]int, error) {
+	now := timeutil.Now()
+
+	stats, err := statCollector.CollectPoint(ctx, l, now, query)
 	if err != nil {
-		// TODO(rafi): Remove experimental_ranges query once we stop testing 19.1 or
-		// earlier.
-		if strings.Contains(err.Error(), "syntax error at or near \"ranges\"") {
-			rows, err = db.Query(
-				`select lease_holder, count(*) ` +
-					`from [show experimental_ranges from table kv.kv] ` +
-					`group by lease_holder;`)
-		}
+		return nil, err
 	}
+
+	counts := make(map[int]int)
+	for store, val := range stats["store"] {
+		storeID, err := strconv.Atoi(store)
+		if err != nil {
+			return nil, err
+		}
+		counts[storeID] = int(val.Value)
+	}
+	return counts, nil
+}
+
+func isLoadEvenlyDistributed(
+	ctx context.Context, l *logger.Logger, statCollector clusterstats.StatCollector,
+) (bool, error) {
+	leaseCounts, err := collectStoreStat(ctx, l, statCollector, "replicas_leaseholders")
 	if err != nil {
 		return false, err
 	}
-	defer rows.Close()
-	leaseCounts := make(map[int]int)
-	var rangeCount int
-	for rows.Next() {
-		var storeID, leaseCount int
-		if err := rows.Scan(&storeID, &leaseCount); err != nil {
-			return false, err
-		}
-		leaseCounts[storeID] = leaseCount
-		rangeCount += leaseCount
+
+	qpsCounts, err := collectStoreStat(ctx, l, statCollector, "rebalancing_queriespersecond")
+	if err != nil {
+		return false, err
 	}
 
-	if len(leaseCounts) < numStores {
-		l.Printf("not all stores have a lease yet: %v\n", formatLeaseCounts(leaseCounts))
-		return false, nil
+	replicaCounts, err := collectStoreStat(ctx, l, statCollector, "replicas")
+	if err != nil {
+		return false, err
 	}
 
-	// The simple case is when ranges haven't split. We can require that every
-	// store has one lease.
-	if rangeCount == numStores {
-		for _, leaseCount := range leaseCounts {
-			if leaseCount != 1 {
-				l.Printf("uneven lease distribution: %s\n", formatLeaseCounts(leaseCounts))
-				return false, nil
-			}
-		}
-		l.Printf("leases successfully distributed: %s\n", formatLeaseCounts(leaseCounts))
+	leaseCountsBalanced := checkLoadDistribution(l, leaseCounts, allocatorimpl.LeaseRebalanceThreshold, "leases")
+	replicaCountsBalanced := checkLoadDistribution(l, replicaCounts, allocatorimpl.RangeRebalanceThreshold.Default(), "replicas")
+	qpsCountsBalanced := checkLoadDistribution(l, qpsCounts, allocator.QPSRebalanceThreshold.Default(), "QPS")
+
+	if leaseCountsBalanced && replicaCountsBalanced && qpsCountsBalanced {
+		l.Printf("Leases, replicas and QPS are balanced.")
 		return true, nil
 	}
-
-	// For completeness, if leases have split, verify the leases per store don't
-	// differ by any more than 1.
-	leases := make([]int, 0, numStores)
-	for _, leaseCount := range leaseCounts {
-		leases = append(leases, leaseCount)
-	}
-	sort.Ints(leases)
-	if leases[0]+1 < leases[len(leases)-1] {
-		l.Printf("leases per store differ by more than one: %s\n", formatLeaseCounts(leaseCounts))
-		return false, nil
-	}
-
-	l.Printf("leases successfully distributed: %s\n", formatLeaseCounts(leaseCounts))
-	return true, nil
+	return false, nil
 }
 
-func formatLeaseCounts(counts map[int]int) string {
+func checkLoadDistribution(
+	l *logger.Logger, distribution map[int]int, threshold float64, loadType string,
+) bool {
+	sum := 0
+	count := len(distribution)
+	for _, load := range distribution {
+		sum += load
+	}
+	avg := float64(sum) / float64(count)
+	overfullThreshold := avg * (1 + threshold)
+	underfullThreshold := avg * (1 - threshold)
+
+	for store, load := range distribution {
+		if float64(load) > overfullThreshold {
+			l.Printf("%s is not balanced, store %d is overfull: %v\n", loadType, store, formatStoreCounts(distribution))
+			return false
+		}
+		if float64(load) < underfullThreshold {
+			l.Printf("%s is not balanced, store %d is underfull: %v\n", loadType, store, formatStoreCounts(distribution))
+			return false
+		}
+	}
+
+	l.Printf("%s is balanced: %s\n", loadType, formatStoreCounts(distribution))
+	return true
+}
+
+func formatStoreCounts(counts map[int]int) string {
 	storeIDs := make([]int, 0, len(counts))
 	for storeID := range counts {
 		storeIDs = append(storeIDs, storeID)
