@@ -36,16 +36,16 @@ import (
 )
 
 const (
-	// leaseRebalanceThreshold is the minimum ratio of a store's lease surplus
+	// LeaseRebalanceThreshold is the minimum ratio of a store's lease surplus
 	// to the mean range/lease count that permits lease-transfers away from that
 	// store.
-	leaseRebalanceThreshold = 0.05
+	LeaseRebalanceThreshold = 0.05
 
 	// baseLoadBasedLeaseRebalanceThreshold is the equivalent of
 	// leaseRebalanceThreshold for load-based lease rebalance decisions (i.e.
 	// "follow-the-workload"). It's the base threshold for decisions that get
 	// adjusted based on the load and latency of the involved ranges/nodes.
-	baseLoadBasedLeaseRebalanceThreshold = 2 * leaseRebalanceThreshold
+	baseLoadBasedLeaseRebalanceThreshold = 2 * LeaseRebalanceThreshold
 
 	// minReplicaWeight sets a floor for how low a replica weight can be. This is
 	// needed because a weight of zero doesn't work in the current lease scoring
@@ -2233,7 +2233,7 @@ func (a Allocator) shouldTransferLeaseForLeaseCountConvergence(
 
 	// Allow lease transfer if we're above the overfull threshold, which is
 	// mean*(1+leaseRebalanceThreshold).
-	overfullLeaseThreshold := int32(math.Ceil(sl.CandidateLeases.Mean * (1 + leaseRebalanceThreshold)))
+	overfullLeaseThreshold := int32(math.Ceil(sl.CandidateLeases.Mean * (1 + LeaseRebalanceThreshold)))
 	minOverfullThreshold := int32(math.Ceil(sl.CandidateLeases.Mean + 5))
 	if overfullLeaseThreshold < minOverfullThreshold {
 		overfullLeaseThreshold = minOverfullThreshold
@@ -2243,7 +2243,7 @@ func (a Allocator) shouldTransferLeaseForLeaseCountConvergence(
 	}
 
 	if float64(source.Capacity.LeaseCount) > sl.CandidateLeases.Mean {
-		underfullLeaseThreshold := int32(math.Ceil(sl.CandidateLeases.Mean * (1 - leaseRebalanceThreshold)))
+		underfullLeaseThreshold := int32(math.Ceil(sl.CandidateLeases.Mean * (1 - LeaseRebalanceThreshold)))
 		minUnderfullThreshold := int32(math.Ceil(sl.CandidateLeases.Mean - 5))
 		if underfullLeaseThreshold > minUnderfullThreshold {
 			underfullLeaseThreshold = minUnderfullThreshold
