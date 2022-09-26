@@ -432,6 +432,7 @@ var (
 type testRange struct {
 	// The first storeID in the list will be the leaseholder.
 	voters, nonVoters []roachpb.StoreID
+	voterNodeIDs      []roachpb.NodeID
 	qps               float64
 }
 
@@ -442,9 +443,15 @@ func loadRanges(rr *replicaRankings, s *Store, ranges []testRange) {
 		repl := &Replica{store: s, RangeID: rangeID}
 		repl.mu.state.Desc = &roachpb.RangeDescriptor{RangeID: rangeID}
 		repl.mu.conf = s.cfg.DefaultSpanConfig
-		for _, storeID := range r.voters {
+		applyNodeID := len(r.voterNodeIDs) > 0
+		for i, storeID := range r.voters {
+			nodeID := roachpb.NodeID(storeID)
+			if applyNodeID {
+				nodeID = r.voterNodeIDs[i]
+			}
+
 			repl.mu.state.Desc.InternalReplicas = append(repl.mu.state.Desc.InternalReplicas, roachpb.ReplicaDescriptor{
-				NodeID:    roachpb.NodeID(storeID),
+				NodeID:    nodeID,
 				StoreID:   storeID,
 				ReplicaID: roachpb.ReplicaID(storeID),
 				Type:      roachpb.VOTER_FULL,
@@ -1227,6 +1234,214 @@ func TestChooseRangeToRebalanceIgnoresRangeOnBestStores(t *testing.T) {
 		t, "could not find.*opportunities for r1",
 		trace, "expected the store rebalancer to explicitly ignore r1; but found %s", trace,
 	)
+}
+
+func TestChooseRangeToRebalanceOffHotNodesMultiStore(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	//
+
+	ctx := context.Background()
+	imbalancedStores := []*roachpb.StoreDescriptor{
+		{
+			StoreID: 1,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 1,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 3920.97,
+			},
+		},
+		{
+			StoreID: 2,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 1,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1923.70,
+			},
+		},
+		{
+			StoreID: 3,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 2,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1919.25,
+			},
+		},
+		{
+			StoreID: 4,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 2,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1913.20,
+			},
+		},
+		{
+			StoreID: 5,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 3,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1940.84,
+			},
+		},
+		{
+			StoreID: 6,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 3,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 11.75,
+			},
+		},
+		{
+			StoreID: 7,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 4,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1957.48,
+			},
+		},
+		{
+			StoreID: 8,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 4,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1899.53,
+			},
+		},
+		{
+			StoreID: 9,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 5,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1932.31,
+			},
+		},
+		{
+			StoreID: 10,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 5,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1921.56,
+			},
+		},
+		{
+			StoreID: 11,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 6,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1919.80,
+			},
+		},
+		{
+			StoreID: 12,
+			Node: roachpb.NodeDescriptor{
+				NodeID: 6,
+			},
+			Capacity: roachpb.StoreCapacity{
+				QueriesPerSecond: 1920.01,
+			},
+		},
+	}
+	for _, tc := range []struct {
+		voters, expRebalancedVoters []roachpb.StoreID
+		QPS, rebalanceThreshold     float64
+		shouldRebalance             bool
+	}{
+		{
+			voters:              []roachpb.StoreID{1, 5, 12},
+			expRebalancedVoters: []roachpb.StoreID{6, 5, 12},
+			QPS:                 1946.70,
+			rebalanceThreshold:  0.10,
+			shouldRebalance:     true,
+		},
+		{
+			voters:              []roachpb.StoreID{1, 5, 12},
+			expRebalancedVoters: []roachpb.StoreID{6, 5, 12},
+			QPS:                 1972.02,
+			rebalanceThreshold:  0.10,
+			shouldRebalance:     true,
+		},
+	} {
+		t.Run("", func(t *testing.T) {
+			stopper, g, _, a, _ := allocatorimpl.CreateTestAllocator(ctx, 6, true /* deterministic */)
+			defer stopper.Stop(context.Background())
+			for i, store := range imbalancedStores {
+				imbalancedStores[i].Attrs.Attrs = []string{
+					fmt.Sprintf("node%d", store.Node.NodeID),
+					fmt.Sprintf("node%dstore%d", store.Node.NodeID, store.StoreID),
+					fmt.Sprintf("store%d", store.StoreID),
+				}
+
+			}
+			gossiputil.NewStoreGossiper(g).GossipStores(imbalancedStores, t)
+			storeList, _, _ := a.StorePool.GetStoreList(storepool.StoreFilterThrottled)
+			sm := storeList.ToMap()
+			voterNodeIDs := []roachpb.NodeID{}
+			for _, storeID := range tc.voters {
+				voterNodeIDs = append(voterNodeIDs, sm[storeID].Node.NodeID)
+			}
+
+			var localDesc roachpb.StoreDescriptor
+			for _, store := range imbalancedStores {
+				if store.StoreID == tc.voters[0] {
+					localDesc = *store
+				}
+			}
+			cfg := TestStoreConfig(nil)
+			s := createTestStoreWithoutStart(
+				ctx, t, stopper, testStoreOpts{createSystemRanges: true}, &cfg,
+			)
+			s.Ident = &roachpb.StoreIdent{StoreID: localDesc.StoreID}
+			rq := newReplicateQueue(s, a)
+			rr := newReplicaRankings()
+
+			sr := NewStoreRebalancer(cfg.AmbientCtx, cfg.Settings, rq, rr)
+
+			// Rather than trying to populate every Replica with a real raft group in
+			// order to pass replicaIsBehind checks, fake out the function for getting
+			// raft status with one that always returns all replicas as up to date.
+			sr.getRaftStatusFn = func(r *Replica) *raft.Status {
+				return TestingRaftStatusFn(r)
+			}
+
+			s.cfg.DefaultSpanConfig.NumReplicas = int32(len(tc.voters))
+			loadRanges(rr, s, []testRange{{voters: tc.voters, qps: tc.QPS, voterNodeIDs: voterNodeIDs}})
+			hottestRanges := rr.topQPS()
+			_, voterTargets, _ := sr.chooseRangeToRebalance(
+				ctx,
+				&hottestRanges,
+				&localDesc,
+				storeList,
+				&allocatorimpl.QPSScorerOptions{
+					StoreHealthOptions:    allocatorimpl.StoreHealthOptions{EnforcementLevel: allocatorimpl.StoreHealthBlockRebalanceTo, L0SublevelThreshold: 20},
+					Deterministic:         true,
+					QPSRebalanceThreshold: tc.rebalanceThreshold,
+					MinRequiredQPSDiff:    allocator.MinQPSDifferenceForTransfers.Default(),
+					QPSPerReplica:         tc.QPS,
+				},
+			)
+			require.Len(t, voterTargets, len(tc.expRebalancedVoters))
+
+			voterStoreIDs := make([]roachpb.StoreID, len(voterTargets))
+			for i, target := range voterTargets {
+				voterStoreIDs[i] = target.StoreID
+			}
+			require.Equal(t, !tc.shouldRebalance, len(voterStoreIDs) == 0)
+			if tc.shouldRebalance {
+				require.ElementsMatch(t, voterStoreIDs, tc.expRebalancedVoters)
+			}
+		})
+	}
 }
 
 func TestChooseRangeToRebalanceOffHotNodes(t *testing.T) {
