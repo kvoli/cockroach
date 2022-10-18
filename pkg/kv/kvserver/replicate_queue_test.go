@@ -1251,6 +1251,9 @@ func TestReplicateQueueSwapVotersWithNonVoters(t *testing.T) {
 				SpanConfig: &spanconfig.TestingKnobs{
 					ConfigureScratchRange: true,
 				},
+				Store: &kvserver.StoreTestingKnobs{
+					DisableReplicaRebalancing: true,
+				},
 			},
 		}
 	}
