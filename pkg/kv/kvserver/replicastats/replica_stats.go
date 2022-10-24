@@ -357,7 +357,7 @@ func (rs *ReplicaStats) AverageRatePerSecond() (float64, time.Duration) {
 	rs.Mu.Lock()
 	defer rs.Mu.Unlock()
 	if rs.Mu.avgRateForTesting != 0 {
-		return rs.Mu.avgRateForTesting, 0
+		return rs.Mu.avgRateForTesting, MinStatsDuration
 	}
 
 	rs.maybeRotateLocked(now)
@@ -393,8 +393,8 @@ func (rs *ReplicaStats) ResetRequestCounts() {
 // current replica stats state, summarized by arithmetic mean count,
 // per-locality count and duration recorded over.
 func (rs *ReplicaStats) SnapshotRatedSummary() *RatedSummary {
-	qps, _ := rs.AverageRatePerSecond()
-	localityCounts, interval := rs.PerLocalityDecayingRate()
+	qps, interval := rs.AverageRatePerSecond()
+	localityCounts, _ := rs.PerLocalityDecayingRate()
 	return &RatedSummary{
 		QPS:            qps,
 		LocalityCounts: localityCounts,
