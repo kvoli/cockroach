@@ -331,6 +331,11 @@ func (r *Replica) ReadBytesPerSecond() float64 {
 	return rbps
 }
 
+func (r *Replica) CPUNanosPerSecond() float64 {
+	cpus, _ := r.loadStats.nanos.AverageRatePerSecond()
+	return cpus
+}
+
 func (r *Replica) needsSplitBySizeRLocked() bool {
 	exceeded, _ := r.exceedsMultipleOfSplitSizeRLocked(1)
 	return exceeded
