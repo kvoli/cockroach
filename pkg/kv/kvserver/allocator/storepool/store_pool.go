@@ -775,6 +775,11 @@ type StoreList struct {
 	// candidateWritesPerSecond tracks L0 sub-level stats for Stores that are
 	// eligible to be rebalance targets.
 	CandidateL0Sublevels Stat
+
+	// candidateCPUNanosPerSecond tracks the nanoseconds spent on
+	// cpu-per-second stats for Stores that are eligible to be rebalance
+	// targets.
+	candidateCPUNanosPerSecond Stat
 }
 
 // MakeStoreList constructs a new store list based on the passed in descriptors.
@@ -797,11 +802,13 @@ func MakeStoreList(descriptors []roachpb.StoreDescriptor) StoreList {
 func (sl StoreList) String() string {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf,
-		"  candidate: avg-ranges=%v avg-leases=%v avg-disk-usage=%v avg-queries-per-second=%v",
+		"  candidate: avg-ranges=%v avg-leases=%v avg-disk-usage=%v avg-queries-per-second=%v "+
+			"avg-cpu-per-second=%s",
 		sl.CandidateRanges.Mean,
 		sl.CandidateLeases.Mean,
 		humanizeutil.IBytes(int64(sl.candidateLogicalBytes.Mean)),
 		sl.CandidateQueriesPerSecond.Mean,
+		humanizeutil.Duration(time.Duration(int64(sl.candidateCPUNanosPerSecond.Mean))),
 	)
 	if len(sl.Stores) > 0 {
 		fmt.Fprintf(&buf, "\n")
@@ -809,11 +816,14 @@ func (sl StoreList) String() string {
 		fmt.Fprintf(&buf, " <no candidates>")
 	}
 	for _, desc := range sl.Stores {
-		fmt.Fprintf(&buf, "  %d: ranges=%d leases=%d disk-usage=%s queries-per-second=%.2f l0-sublevels=%d\n",
+		fmt.Fprintf(&buf,
+			"  %d: ranges=%d leases=%d disk-usage=%s queries-per-second=%.2f "+
+				"l0-sublevels=%d avg-cpu-per-second=%s\n",
 			desc.StoreID, desc.Capacity.RangeCount,
 			desc.Capacity.LeaseCount, humanizeutil.IBytes(desc.Capacity.LogicalBytes),
 			desc.Capacity.QueriesPerSecond,
 			desc.Capacity.L0Sublevels,
+			humanizeutil.Duration(time.Duration(int64(desc.Capacity.CpuPerSecond))),
 		)
 	}
 	return buf.String()

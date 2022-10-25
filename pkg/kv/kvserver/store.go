@@ -3014,6 +3014,7 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	now := s.cfg.Clock.NowAsClockTimestamp()
 	var leaseCount int32
 	var rangeCount int32
+	var totalCPUTimePerSecond float64
 	var logicalBytes int64
 	var l0SublevelsMax int64
 	var totalQueriesPerSecond float64
@@ -3047,6 +3048,10 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 			totalWritesPerSecond += wps
 			writesPerReplica = append(writesPerReplica, wps)
 		}
+
+		if cpus, dur := r.loadStats.nanos.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
+			totalWritesPerSecond += cpus
+		}
 		rankingsAccumulator.AddReplica(candidateReplica{
 			Replica: r,
 			qps:     qps,
@@ -3059,6 +3064,7 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	capacity.QueriesPerSecond = totalQueriesPerSecond
 	capacity.WritesPerSecond = totalWritesPerSecond
 	capacity.L0Sublevels = l0SublevelsMax
+	capacity.CpuPerSecond = totalCPUTimePerSecond
 	{
 		s.ioThreshold.Lock()
 		capacity.IOThreshold = *s.ioThreshold.t

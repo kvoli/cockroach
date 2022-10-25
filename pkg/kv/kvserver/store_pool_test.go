@@ -55,6 +55,7 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 				QueriesPerSecond: 100,
 				WritesPerSecond:  30,
 				L0Sublevels:      4,
+				CpuPerSecond:     2,
 			},
 		},
 		{
@@ -69,6 +70,7 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 				QueriesPerSecond: 50,
 				WritesPerSecond:  25,
 				L0Sublevels:      8,
+				CpuPerSecond:     4,
 			},
 		},
 	}
@@ -113,6 +115,10 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 		t.Errorf("expected L0 Sub-Levels %d, but got %d", expectedL0Sublevels, desc.Capacity.L0Sublevels)
 	}
 
+	if expectedCPUPerSecond := int64(2); desc.Capacity.CpuPerSecond != float64(expectedCPUPerSecond) {
+		t.Errorf("expected CPUPerSecond %d, but got %d", expectedCPUPerSecond, desc.Capacity.CpuPerSecond)
+	}
+
 	sp.UpdateLocalStoreAfterRebalance(roachpb.StoreID(2), rangeUsageInfo, roachpb.REMOVE_VOTER)
 	desc, ok = sp.GetStoreDescriptor(roachpb.StoreID(2))
 	if !ok {
@@ -132,6 +138,9 @@ func TestStorePoolUpdateLocalStore(t *testing.T) {
 	}
 	if expectedL0Sublevels := int64(8); desc.Capacity.L0Sublevels != expectedL0Sublevels {
 		t.Errorf("expected L0 Sub-Levels %d, but got %d", expectedL0Sublevels, desc.Capacity.L0Sublevels)
+	}
+	if expectedCPUPerSecond := int64(4); desc.Capacity.CpuPerSecond != float64(expectedCPUPerSecond) {
+		t.Errorf("expected CPUPerSecond %d, but got %d", expectedCPUPerSecond, desc.Capacity.CpuPerSecond)
 	}
 
 	sp.UpdateLocalStoresAfterLeaseTransfer(roachpb.StoreID(1), roachpb.StoreID(2), rangeUsageInfo.QueriesPerSecond)
