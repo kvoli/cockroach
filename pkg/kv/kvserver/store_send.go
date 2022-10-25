@@ -17,6 +17,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/util/grunning"
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 	"github.com/cockroachdb/cockroach/pkg/util/limit"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
@@ -164,6 +165,19 @@ func (s *Store) SendWithWriteBytes(
 	if log.ExpensiveLogEnabled(ctx, 1) {
 		log.Eventf(ctx, "executing %s", ba)
 	}
+
+	// Track the time spent on the goroutine, processing this batch.
+	startGrunning := grunning.Time()
+	defer func() {
+		repl, err := s.GetReplica(ba.RangeID)
+		if err != nil {
+			return
+		}
+		if !repl.IsInitialized() {
+			return
+		}
+		repl.RecordNanosRunning(grunning.Difference(startGrunning, grunning.Time()).Nanoseconds())
+	}()
 
 	// Tracks suggested ranges to return to the caller. Suggested ranges are aggregated from
 	// two sources.
