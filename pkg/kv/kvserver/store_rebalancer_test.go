@@ -435,7 +435,7 @@ type testRange struct {
 }
 
 func loadRanges(rr *ReplicaRankings, s *Store, ranges []testRange) {
-	acc := rr.NewAccumulator()
+	acc := rr.NewAccumulator(state.QueriesDim)
 	for i, r := range ranges {
 		rangeID := roachpb.RangeID(i + 1)
 		repl := &Replica{store: s, RangeID: rangeID}
@@ -467,13 +467,12 @@ func loadRanges(rr *ReplicaRankings, s *Store, ranges []testRange) {
 		// TODO(a-robinson): The below three lines won't be needed once the old
 		// rangeInfo code is ripped out of the allocator.
 		repl.mu.state.Stats = &enginepb.MVCCStats{}
-
 		repl.loadStats = NewReplicaLoad(s.Clock(), nil)
 		repl.loadStats.batchRequests.SetMeanRateForTesting(r.qps)
 
 		acc.AddReplica(candidateReplica{
 			Replica: repl,
-			qps:     r.qps,
+			usage:   RangeUsageInfo(r),
 		})
 	}
 	rr.Update(acc)

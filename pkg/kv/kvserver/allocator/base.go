@@ -152,8 +152,8 @@ const (
 	// LeaseCountConvergence transfers leases such that lease counts converge
 	// across stores.
 	LeaseCountConvergence
-	// QPSConvergence transfers leases such that QPS converges across stores.
-	QPSConvergence
+	// LoadConvergence transfers leases such that QPS converges across stores.
+	LoadConvergence
 )
 
 // TransferLeaseOptions is the set of options needed to evaluate a lease

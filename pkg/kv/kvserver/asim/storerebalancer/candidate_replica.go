@@ -100,16 +100,6 @@ func (sr *simulatorReplica) RangeUsageInfo() allocator.RangeUsageInfo {
 	return sr.usage
 }
 
-// Stats returns the QPS replica load stats.
-func (sr *simulatorReplica) Stats() *replicastats.RatedSummary {
-	// TODO(kvoli): instrument replica stats for the simulator. Currently we
-	// have the replica stats struct however we do not use the summary
-	// information on per-count localities supplied from it.
-	return &replicastats.RatedSummary{
-		QPS: sr.QPS(),
-	}
-}
-
 // AdminTransferLease transfers the LeaderLease to another replica.
 func (sr *simulatorReplica) AdminTransferLease(
 	ctx context.Context, target roachpb.StoreID, bypassSafetyChecks bool,

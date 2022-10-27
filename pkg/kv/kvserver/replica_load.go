@@ -15,6 +15,72 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/hlc"
 )
 
+// problems:
+// - many things use replicastats directly and there is no uniformity in what
+//   uses what
+//   sol: use only one, allocator pkg struct that represents the load of a
+//   replica
+//
+// - replica stats is not configurable for decay and does not have an interface
+//   interface e.g. we want to add in cpu to be tracked, however we want to
+//   modify things underneath for period, decaying and so on.
+//   sol: create an interface on the accounting side, create an interface on
+//   the using side.
+//
+// - adding more stats uses more memory, having a different struct per stat is
+//   expensive
+//   sol: consolidate stats into one struct, one mutex.
+//
+// - per-locality counts applies specifically to qps and nearly nothing else.
+//   sol: split this out explicity from the API
+//
+// - ui hot ranges is coupled to replica rankings, which in turn cals the
+// XPerSecond methods directly for load.
+//
+// sol
+//    (1) make a single struct (or interface) on the allocator side that will
+//        contain everything. i.e. update everything to use RangeUsageInfo.
+//    (2) Add support for generating RangeUsageInfo from replica load.
+//    (3) wrap all load accounting into a single interface. which may have
+//        different accounting beneath it.
+//
+// most important is to separate collection i.e from updating
+// need to separate collection from updating
+//
+// record
+//   bumping counters e.g. bump writekeys counter += N
+// collect and store with different aggregating uses
+//   collect from load counters
+//   collect from local state
+//   collect from gossip
+// query aggregations and use them to make decisions
+//   averageX, medianX, ...
+//   rankings
+//   create capacity
+//   use as dimension in allocator
+// update collected aggregations on actions (applies to aggregations)
+//   split, merge, reset
+//
+// balancing
+//   check balance
+//   find action
+//
+// (1) refactor allocator methods to take an arbitrary dimension:
+//   - [ ] StoreRebalancer
+//   - [ ] Allocator Methods
+//   - [ ] QPSScorerOptions
+//
+// (2) refactor replicastats, replica rankings, capacity  range usage info to
+// be decoupled.
+//   -  [ ] ReplicaStats
+//   -  [ ] ReplicaRankings
+//   -  [ ] Capacity/StorePool
+//   -  [ ] RangeUsageInfo
+//
+// 1d hard to refactor parts:
+// - store_rebalancer RebalanceRanges
+// - store_rebalancer chooseLeaseToTransfer
+
 // ReplicaLoad tracks a sliding window of throughput on a replica. By default,
 // there are 6, 5 minute sliding windows.
 type ReplicaLoad struct {

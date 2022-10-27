@@ -34,6 +34,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvclient/rangecache"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/allocatorimpl"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/state"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/batcheval"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/closedts"
@@ -3021,7 +3022,7 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	replicaCount := s.metrics.ReplicaCount.Value()
 	bytesPerReplica := make([]float64, 0, replicaCount)
 	writesPerReplica := make([]float64, 0, replicaCount)
-	rankingsAccumulator := s.replRankings.NewAccumulator()
+	rankingsAccumulator := s.replRankings.NewAccumulator(state.QueriesDimension)
 
 	// Query the current L0 sublevels and record the updated maximum to metrics.
 	l0SublevelsMax = int64(syncutil.LoadFloat64(&s.metrics.l0SublevelsWindowedMax))
@@ -3037,19 +3038,12 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 		// incorrectly low the first time or two it gets gossiped when a store
 		// starts? We can't easily have a countdown as its value changes like for
 		// leases/replicas.
-		var qps float64
-		if avgQPS, dur := r.loadStats.batchRequests.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
-			qps = avgQPS
-			totalQueriesPerSecond += avgQPS
-			// TODO(a-robinson): Calculate percentiles for qps? Get rid of other percentiles?
-		}
-		if wps, dur := r.loadStats.writeKeys.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
-			totalWritesPerSecond += wps
-			writesPerReplica = append(writesPerReplica, wps)
-		}
+		usage := RangeUsageInfoForRepl(r)
+		totalQueriesPerSecond += usage.QueriesPerSecond
+		totalWritesPerSecond += usage.WritesPerSecond
 		rankingsAccumulator.AddReplica(candidateReplica{
 			Replica: r,
-			qps:     qps,
+			usage:   usage,
 		})
 		return true
 	})
@@ -3512,11 +3506,11 @@ type HotReplicaInfo struct {
 // Note that this uses cached information, so it's cheap but may be slightly
 // out of date.
 func (s *Store) HottestReplicas() []HotReplicaInfo {
-	topQPS := s.replRankings.TopQPS()
+	topQPS := s.replRankings.TopLoad()
 	hotRepls := make([]HotReplicaInfo, len(topQPS))
 	for i := range topQPS {
 		hotRepls[i].Desc = topQPS[i].Desc()
-		hotRepls[i].QPS = topQPS[i].QPS()
+		hotRepls[i].QPS = topQPS[i].RangeUsageInfo().QueriesPerSecond
 		hotRepls[i].RequestsPerSecond = topQPS[i].Repl().RequestsPerSecond()
 		hotRepls[i].WriteKeysPerSecond = topQPS[i].Repl().WritesPerSecond()
 		hotRepls[i].ReadKeysPerSecond = topQPS[i].Repl().ReadsPerSecond()

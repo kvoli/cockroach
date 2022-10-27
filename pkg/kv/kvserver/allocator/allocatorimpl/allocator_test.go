@@ -2400,7 +2400,7 @@ func TestAllocatorShouldTransferLease(t *testing.T) {
 					storeID:           c.leaseholder,
 					replicationFactor: int32(len(c.existing)),
 				},
-				nil, /* replicaStats */
+				allocator.RangeUsageInfo{},
 			)
 			if c.expected != result {
 				t.Fatalf("expected %v, but found %v", c.expected, result)

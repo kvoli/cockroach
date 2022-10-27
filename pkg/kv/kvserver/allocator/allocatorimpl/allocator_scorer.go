@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/state"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/constraint"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
@@ -407,13 +408,31 @@ func (o *RangeCountScorerOptions) removalMaximallyConvergesScore(
 	return 0
 }
 
-// QPSScorerOptions is used by the StoreRebalancer to tell the Allocator's
+// type LoadScorerOptions struct {
+// 	Deterministic      bool
+// 	StoreHealthOptions StoreHealthOptions
+//
+// 	Thresholds state.DimensionContainer
+//
+// 	MinRequiredDiff state.DimensionContainer
+// 	PerReplicaValue state.DimensionContainer
+//
+// 	Dimensions []state.LoadDimension
+// }
+
+// TODO(kvoli): impement this
+func OverfullLoadThresholds(means, thresholds state.DimensionContainer) state.DimensionContainer {
+	return nil
+}
+
+// LoadScorerOptions is used by the StoreRebalancer to tell the Allocator's
 // rebalancing machinery to base its balance/convergence scores on
 // queries-per-second. This means that the resulting rebalancing decisions will
 // further the goal of converging QPS across stores in the cluster.
-type QPSScorerOptions struct {
+type LoadScorerOptions struct {
 	StoreHealthOptions StoreHealthOptions
 	Deterministic      bool
+	Dimensions         []state.LoadDimension
 
 	// NB: For mixed version compatibility with 21.2, we need to include the range
 	// count based rebalance threshold here. This is because in 21.2, the store
@@ -421,7 +440,7 @@ type QPSScorerOptions struct {
 	// stores.
 	DeprecatedRangeRebalanceThreshold float64
 
-	QPSRebalanceThreshold, MinRequiredQPSDiff float64
+	LoadRebalanceThreshold, MinRequiredLoadDiff state.DimensionContainer
 
 	// QPS-based rebalancing assumes that:
 	// 1. Every replica of a range currently receives the same level of traffic.
@@ -435,26 +454,29 @@ type QPSScorerOptions struct {
 	// track it separately yet. See
 	// https://github.com/cockroachdb/cockroach/issues/75630.
 
-	// QPSPerReplica states the level of traffic being served by each replica in a
+	// LoadPerReplica states the level of traffic being served by each replica in a
 	// range.
-	QPSPerReplica float64
+	//
+	// TODO(kvoli): This value should differ depending on whether it is a
+	// rebalance or transfer or generally use two different methods.
+	LoadPerReplica state.DimensionContainer
 }
 
-func (o *QPSScorerOptions) getStoreHealthOptions() StoreHealthOptions {
+func (o *LoadScorerOptions) getStoreHealthOptions() StoreHealthOptions {
 	return o.StoreHealthOptions
 }
 
-func (o *QPSScorerOptions) getRangeRebalanceThreshold() float64 {
+func (o *LoadScorerOptions) getRangeRebalanceThreshold() float64 {
 	return o.DeprecatedRangeRebalanceThreshold
 }
 
-func (o *QPSScorerOptions) maybeJitterStoreStats(
+func (o *LoadScorerOptions) maybeJitterStoreStats(
 	sl storepool.StoreList, _ allocatorRand,
 ) storepool.StoreList {
 	return sl
 }
 
-func (o *QPSScorerOptions) deterministicForTesting() bool {
+func (o *LoadScorerOptions) deterministicForTesting() bool {
 	return o.Deterministic
 }
 
@@ -462,7 +484,7 @@ func (o *QPSScorerOptions) deterministicForTesting() bool {
 // equivalenceClass `eqClass`, rebalancing a replica from one of the existing
 // stores to one of the candidate stores will lead to QPS convergence among the
 // stores in the equivalence class.
-func (o QPSScorerOptions) shouldRebalanceBasedOnThresholds(
+func (o LoadScorerOptions) shouldRebalanceBasedOnThresholds(
 	ctx context.Context, eqClass equivalenceClass, metrics AllocatorMetrics,
 ) bool {
 	if len(eqClass.candidateSL.Stores) == 0 {
@@ -500,7 +522,7 @@ func (o QPSScorerOptions) shouldRebalanceBasedOnThresholds(
 		log.KvDistribution.VEventf(
 			ctx, 4,
 			"should rebalance replica with %0.2f qps from s%d (qps=%0.2f) to s%d (qps=%0.2f)",
-			o.QPSPerReplica, eqClass.existing.StoreID,
+			o.LoadPerReplica, eqClass.existing.StoreID,
 			eqClass.existing.Capacity.QueriesPerSecond,
 			bestStore, bestStoreQPS,
 		)
@@ -511,7 +533,7 @@ func (o QPSScorerOptions) shouldRebalanceBasedOnThresholds(
 	return declineReason == shouldRebalance
 }
 
-func (o *QPSScorerOptions) balanceScore(
+func (o *LoadScorerOptions) balanceScore(
 	sl storepool.StoreList, sc roachpb.StoreCapacity,
 ) balanceStatus {
 	maxQPS := OverfullQPSThreshold(o, sl.CandidateQueriesPerSecond.Mean)
@@ -528,7 +550,7 @@ func (o *QPSScorerOptions) balanceScore(
 // rebalanceFromConvergesScore returns a score of -1 if the existing store in
 // eqClass needs to be rebalanced away in order to minimize the QPS delta
 // between the stores in the equivalence class `eqClass`.
-func (o *QPSScorerOptions) rebalanceFromConvergesScore(eqClass equivalenceClass) int {
+func (o *LoadScorerOptions) rebalanceFromConvergesScore(eqClass equivalenceClass) int {
 	_, declineReason := o.getRebalanceTargetToMinimizeDelta(eqClass)
 	// If there are any rebalance opportunities that minimize the QPS delta in
 	// this equivalence class, we return a score of -1 to make the existing store
@@ -542,7 +564,7 @@ func (o *QPSScorerOptions) rebalanceFromConvergesScore(eqClass equivalenceClass)
 // rebalanceToConvergesScore returns a score of 1 if `candidate` needs to be
 // rebalanced to in order to minimize the QPS delta between the stores in the
 // equivalence class `eqClass`
-func (o *QPSScorerOptions) rebalanceToConvergesScore(
+func (o *LoadScorerOptions) rebalanceToConvergesScore(
 	eqClass equivalenceClass, candidate roachpb.StoreDescriptor,
 ) int {
 	bestTarget, declineReason := o.getRebalanceTargetToMinimizeDelta(eqClass)
@@ -555,7 +577,7 @@ func (o *QPSScorerOptions) rebalanceToConvergesScore(
 // removalMaximallyConvergesScore returns a score of -1 `existing` is the
 // hottest store (based on QPS) among the stores inside
 // `removalCandidateStores`.
-func (o *QPSScorerOptions) removalMaximallyConvergesScore(
+func (o *LoadScorerOptions) removalMaximallyConvergesScore(
 	removalCandStoreList storepool.StoreList, existing roachpb.StoreDescriptor,
 ) int {
 	maxQPS := float64(-1)
@@ -985,8 +1007,8 @@ func rankedCandidateListForAllocation(
 		//
 		// TODO(aayush): Remove this some time in the 22.2 cycle.
 		var convergesScore int
-		if qpsOpts, ok := options.(*QPSScorerOptions); ok {
-			if qpsOpts.QPSRebalanceThreshold > 0 {
+		if qpsOpts, ok := options.(*LoadScorerOptions); ok {
+			if qpsOpts.LoadRebalanceThreshold > 0 {
 				if s.Capacity.QueriesPerSecond < UnderfullQPSThreshold(
 					qpsOpts, candidateStores.CandidateQueriesPerSecond.Mean,
 				) {
@@ -1170,7 +1192,7 @@ type equivalenceClass struct {
 }
 
 // declineReason enumerates the various results of a call into
-// `bestStoreToMinimizeQPSDelta`. The result may be that we have a good
+// `bestStoreToMinimizeLoadDelta`. The result may be that we have a good
 // candidate to rebalance to (indicated by `shouldRebalance`) or it might be
 // rejected due to a number of reasons (see below).
 type declineReason int
@@ -1198,31 +1220,40 @@ const (
 	missingStatsForExistingStore
 )
 
-// bestStoreToMinimizeQPSDelta computes a rebalance (or lease transfer) target
+// bestStoreToMinimizeLoadDelta computes a rebalance (or lease transfer) target
 // for the existing store such that executing the rebalance (or lease transfer)
 // decision would minimize the QPS range between the existing store and the
 // coldest store in the equivalence class.
-func bestStoreToMinimizeQPSDelta(
-	replQPS float64,
+func bestStoreToMinimizeLoadDelta(
+	replLoadValue state.DimensionContainer,
 	existing roachpb.StoreID,
 	candidates []roachpb.StoreID,
 	storeDescMap map[roachpb.StoreID]*roachpb.StoreDescriptor,
-	options *QPSScorerOptions,
+	options *LoadScorerOptions,
 ) (bestCandidate roachpb.StoreID, reason declineReason) {
-	storeQPSMap := make(map[roachpb.StoreID]float64, len(candidates)+1)
+	// This function is only intended to be called with the purpose one load
+	// dimension. Panic if not.
+	if len(options.Dimensions) != 1 {
+		panic(fmt.Sprintf(
+			"bestStoreToMinimizeLoadDelta only supports one minimizing the delta over 1-dimension, %d specified",
+			len(options.Dimensions)))
+	}
+	dimension := options.Dimensions[0]
+
+	storeLoadMap := make(map[roachpb.StoreID]state.DimensionContainer, len(candidates)+1)
 	for _, store := range candidates {
 		if desc, ok := storeDescMap[store]; ok {
-			storeQPSMap[store] = desc.Capacity.QueriesPerSecond
+			storeLoadMap[store] = desc.Capacity.Dimensions()
 		}
 	}
 	desc, ok := storeDescMap[existing]
 	if !ok {
 		return 0, missingStatsForExistingStore
 	}
-	storeQPSMap[existing] = desc.Capacity.QueriesPerSecond
+	storeLoadMap[existing] = desc.Capacity.Dimensions()
 
 	// domain defines the domain over which this function tries to minimize the
-	// QPS delta.
+	// load delta.
 	domain := append(candidates, existing)
 	storeDescs := make([]roachpb.StoreDescriptor, 0, len(domain))
 	for _, desc := range storeDescMap {
@@ -1230,49 +1261,53 @@ func bestStoreToMinimizeQPSDelta(
 	}
 	domainStoreList := storepool.MakeStoreList(storeDescs)
 
-	bestCandidate = getCandidateWithMinQPS(storeQPSMap, candidates)
+	bestCandidate = getCandidateWithMinLoad(storeLoadMap, candidates, dimension)
 	if bestCandidate == 0 {
 		return 0, noBetterCandidate
 	}
 
-	bestCandQPS := storeQPSMap[bestCandidate]
-	existingQPS := storeQPSMap[existing]
-	if bestCandQPS > existingQPS {
+	bestCandLoad := storeLoadMap[bestCandidate]
+	existingLoad := storeLoadMap[existing]
+	if existingLoad.LessOrEqual(bestCandLoad) {
 		return 0, noBetterCandidate
 	}
 
-	// NB: The store's QPS and the replica's QPS aren't captured at the same
+	// NB: The store's load and the replica's QPS aren't captured at the same
 	// time, so they may be mutually inconsistent. Thus, it is possible for
-	// the store's QPS captured here to be lower than the replica's QPS. So we
+	// the store's load captured here to be lower than the replica's load. So we
 	// defensively use the `math.Max` here.
-	existingQPSIgnoringRepl := math.Max(existingQPS-replQPS, 0)
+	// TODO(kvoli) this use to be math.max
+	existingLoadIgnoringRepl := existingLoad.Sub(replLoadValue)
 
 	// Only proceed if the QPS difference between `existing` and
 	// `bestCandidate` (not accounting for the replica under consideration) is
 	// higher than `minQPSDifferenceForTransfers`.
-	diffIgnoringRepl := existingQPSIgnoringRepl - bestCandQPS
-	if diffIgnoringRepl < options.MinRequiredQPSDiff {
+	diffIgnoringRepl := existingLoadIgnoringRepl.Sub(bestCandLoad)
+	if diffIgnoringRepl.LessOrEqual(options.MinRequiredLoadDiff) {
 		return 0, deltaNotSignificant
 	}
 
 	// Only proceed with rebalancing iff `existingStore` is overfull relative to
 	// the equivalence class.
-	mean := domainStoreList.CandidateQueriesPerSecond.Mean
-	overfullThreshold := OverfullQPSThreshold(
-		options,
-		mean,
+	overfullThreshold := OverfullLoadThresholds(
+		domainStoreList.Dimensions(),
+		options.LoadRebalanceThreshold,
 	)
-	if existingQPS < overfullThreshold {
+
+	// The existing load does not exceed the overfull threshold so it is not
+	// worthwhile rebalancing.
+	if existingLoad.LessOrEqual(overfullThreshold) {
 		return 0, existingNotOverfull
 	}
 
-	currentQPSDelta := getQPSDelta(storeQPSMap, domain)
+	// converge values
+	currentQPSDelta := getLoadDelta(storeLoadMap, domain, dimension)
 	// Simulate the coldest candidate's QPS after it receives a lease/replica for
 	// the range.
-	storeQPSMap[bestCandidate] += replQPS
+	storeLoadMap[bestCandidate] = storeLoadMap[bestCandidate].Add(replLoadValue)
 	// Simulate the hottest existing store's QPS after it sheds the lease/replica
 	// away.
-	storeQPSMap[existing] = existingQPSIgnoringRepl
+	storeLoadMap[existing] = storeLoadMap[existing].Sub(existingLoadIgnoringRepl)
 
 	// NB: We proceed with a lease transfer / rebalance even if `currentQPSDelta`
 	// is exactly equal to `newQPSDelta`. Consider the following example:
@@ -1283,14 +1318,13 @@ func bestStoreToMinimizeQPSDelta(
 	// In such (perhaps unrealistic) scenarios, rebalancing from the existing
 	// store to the coldest store is not going to reduce the delta between all
 	// these stores, but it is still a desirable action to take.
-
-	newQPSDelta := getQPSDelta(storeQPSMap, domain)
+	newQPSDelta := getLoadDelta(storeLoadMap, domain, dimension)
 	if currentQPSDelta < newQPSDelta {
 		panic(
 			fmt.Sprintf(
-				"programming error: projected QPS delta higher than current delta;"+
-					" existing: %0.2f qps, coldest candidate: %0.2f qps, replica/lease: %0.2f qps",
-				existingQPS, bestCandQPS, replQPS,
+				"programming error: projected load delta higher than current delta;"+
+					" existing: %s, coldest candidate: %s, replica/lease: %s, dimension %s",
+				existingLoad, bestCandLoad, replLoadValue, state.LoadDimensionNames[dimension],
 			),
 		)
 	}
@@ -1302,7 +1336,7 @@ func bestStoreToMinimizeQPSDelta(
 // candidates in the equivalence class) such that rebalancing to this store
 // would minimize the delta between the existing store and the coldest store in
 // the equivalence class.
-func (o *QPSScorerOptions) getRebalanceTargetToMinimizeDelta(
+func (o *LoadScorerOptions) getRebalanceTargetToMinimizeDelta(
 	eqClass equivalenceClass,
 ) (bestStore roachpb.StoreID, declineReason declineReason) {
 	domainStoreList := storepool.MakeStoreList(append(eqClass.candidateSL.Stores, eqClass.existing))
@@ -1310,8 +1344,8 @@ func (o *QPSScorerOptions) getRebalanceTargetToMinimizeDelta(
 	for _, store := range eqClass.candidateSL.Stores {
 		candidates = append(candidates, store.StoreID)
 	}
-	return bestStoreToMinimizeQPSDelta(
-		o.QPSPerReplica,
+	return bestStoreToMinimizeLoadDelta(
+		o.LoadPerReplica,
 		eqClass.existing.StoreID,
 		candidates,
 		domainStoreList.ToMap(),
@@ -2047,6 +2081,14 @@ const (
 	underfull     balanceStatus = 1
 )
 
+func overfullThreshold(threshold float64, mean float64) float64 {
+	return mean + math.Max(mean*threshold, minRangeRebalanceThreshold)
+}
+
+func underfullThreshold(threshold float64, mean float64) float64 {
+	return mean - math.Max(mean*threshold, minRangeRebalanceThreshold)
+}
+
 func overfullRangeThreshold(options *RangeCountScorerOptions, mean float64) float64 {
 	return mean + math.Max(mean*options.rangeRebalanceThreshold, minRangeRebalanceThreshold)
 }
@@ -2056,13 +2098,13 @@ func underfullRangeThreshold(options *RangeCountScorerOptions, mean float64) flo
 }
 
 // OverfullQPSThreshold computes the overfull QPS threshold.
-func OverfullQPSThreshold(options *QPSScorerOptions, mean float64) float64 {
-	return mean + math.Max(mean*options.QPSRebalanceThreshold, allocator.MinQPSThresholdDifference)
+func OverfullQPSThreshold(options *LoadScorerOptions, mean float64) float64 {
+	return mean + math.Max(mean*options.LoadRebalanceThreshold, allocator.MinQPSThresholdDifference)
 }
 
 // UnderfullQPSThreshold computes the underfull QPS threshold.
-func UnderfullQPSThreshold(options *QPSScorerOptions, mean float64) float64 {
-	return mean - math.Max(mean*options.QPSRebalanceThreshold, allocator.MinQPSThresholdDifference)
+func UnderfullQPSThreshold(options *LoadScorerOptions, mean float64) float64 {
+	return mean - math.Max(mean*options.LoadRebalanceThreshold, allocator.MinQPSThresholdDifference)
 }
 
 func rebalanceConvergesRangeCountOnMean(

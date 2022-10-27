@@ -20,10 +20,10 @@ import (
 	"time"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/state"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/constraint"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/raftutil"
-	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/replicastats"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/settings/cluster"
@@ -1706,7 +1706,7 @@ func (a *Allocator) TransferLeaseTarget(
 		GetFirstIndex() uint64
 		Desc() *roachpb.RangeDescriptor
 	},
-	statSummary *replicastats.RatedSummary,
+	usageInfo allocator.RangeUsageInfo,
 	forceDecisionWithoutStats bool,
 	opts allocator.TransferLeaseOptions,
 ) roachpb.ReplicaDescriptor {
@@ -1748,7 +1748,7 @@ func (a *Allocator) TransferLeaseTarget(
 		// falls back to `leaseCountConvergence`. Rationalize this or refactor this
 		// logic to be more clear.
 		transferDec, repl := a.shouldTransferLeaseForAccessLocality(
-			ctx, source, existing, statSummary, nil, candidateLeasesMean,
+			ctx, source, existing, usageInfo, nil, candidateLeasesMean,
 		)
 		if !excludeLeaseRepl {
 			switch transferDec {
@@ -1814,8 +1814,8 @@ func (a *Allocator) TransferLeaseTarget(
 		defer a.randGen.Unlock()
 		return candidates[a.randGen.Intn(len(candidates))]
 
-	case allocator.QPSConvergence:
-		leaseReplQPS := statSummary.QPS
+	case allocator.LoadConvergence:
+		leaseReplQPS := usageInfo.QueriesPerSecond
 		candidates := make([]roachpb.StoreID, 0, len(existing)-1)
 		for _, repl := range existing {
 			if repl.StoreID != leaseRepl.StoreID() {
@@ -1833,7 +1833,7 @@ func (a *Allocator) TransferLeaseTarget(
 		// be true in all cases (some percentage of the leaseholder's traffic could
 		// be follower read traffic). See
 		// https://github.com/cockroachdb/cockroach/issues/75630.
-		bestStore, noRebalanceReason := bestStoreToMinimizeQPSDelta(
+		bestStore, noRebalanceReason := bestStoreToMinimizeDimDelta(
 			leaseReplQPS,
 			leaseRepl.StoreID(),
 			candidates,
@@ -1902,44 +1902,53 @@ func (a *Allocator) TransferLeaseTarget(
 	panic("unreachable")
 }
 
-// getCandidateWithMinQPS returns the StoreID that belongs to the store serving
-// the lowest QPS among all the `candidates` stores.
-func getCandidateWithMinQPS(
-	storeQPSMap map[roachpb.StoreID]float64, candidates []roachpb.StoreID,
+// getCandidateWithMinLoad returns the StoreID that belongs to the store
+// serving the lowest load among all the `candidates` stores, given a single
+// dimension of load e.g. QPS.
+func getCandidateWithMinLoad(
+	storeLoadMap map[roachpb.StoreID]state.DimensionContainer,
+	candidates []roachpb.StoreID,
+	dimension state.LoadDimension,
 ) (bestCandidate roachpb.StoreID) {
-	minCandidateQPS := math.MaxFloat64
+	minCandidateLoad := math.MaxFloat64
 	for _, store := range candidates {
-		candidateQPS, ok := storeQPSMap[store]
+		candidateLoad, ok := storeLoadMap[store]
 		if !ok {
 			continue
 		}
-		if minCandidateQPS > candidateQPS {
-			minCandidateQPS = candidateQPS
+		candidateLoadDim := candidateLoad.Dimension(dimension)
+		if minCandidateLoad > candidateLoadDim {
+			minCandidateLoad = candidateLoadDim
 			bestCandidate = store
 		}
 	}
 	return bestCandidate
 }
 
-// getQPSDelta returns the difference between the store serving the highest QPS
+// getLoadDelta returns the difference between the store serving the highest QPS
 // and the store serving the lowest QPS, among the set of stores in the
 // `domain`.
-func getQPSDelta(storeQPSMap map[roachpb.StoreID]float64, domain []roachpb.StoreID) float64 {
-	maxCandidateQPS := float64(0)
-	minCandidateQPS := math.MaxFloat64
+func getLoadDelta(
+	storeLoadMap map[roachpb.StoreID]state.DimensionContainer,
+	domain []roachpb.StoreID,
+	dimension state.LoadDimension,
+) float64 {
+	maxCandidateLoad := float64(0)
+	minCandidateLoad := math.MaxFloat64
 	for _, cand := range domain {
-		candidateQPS, ok := storeQPSMap[cand]
+		candidateLoad, ok := storeLoadMap[cand]
 		if !ok {
 			continue
 		}
-		if maxCandidateQPS < candidateQPS {
-			maxCandidateQPS = candidateQPS
+		candidateLoadDim := candidateLoad.Dimension(dimension)
+		if maxCandidateLoad < candidateLoadDim {
+			maxCandidateLoad = candidateLoadDim
 		}
-		if minCandidateQPS > candidateQPS {
-			minCandidateQPS = candidateQPS
+		if minCandidateLoad > candidateLoadDim {
+			minCandidateLoad = candidateLoadDim
 		}
 	}
-	return maxCandidateQPS - minCandidateQPS
+	return maxCandidateLoad - minCandidateLoad
 }
 
 // ShouldTransferLease returns true if the specified store is overfull in terms
@@ -1955,7 +1964,7 @@ func (a *Allocator) ShouldTransferLease(
 		GetFirstIndex() uint64
 		Desc() *roachpb.RangeDescriptor
 	},
-	statSummary *replicastats.RatedSummary,
+	usageInfo allocator.RangeUsageInfo,
 ) bool {
 	if a.leaseholderShouldMoveDueToPreferences(ctx, conf, leaseRepl, existing) {
 		return true
@@ -1986,7 +1995,7 @@ func (a *Allocator) ShouldTransferLease(
 		ctx,
 		source,
 		existing,
-		statSummary,
+		usageInfo,
 		nil,
 		sl.CandidateLeases.Mean,
 	)
@@ -2016,10 +2025,10 @@ func (a Allocator) FollowTheWorkloadPrefersLocal(
 	source roachpb.StoreDescriptor,
 	candidate roachpb.StoreID,
 	existing []roachpb.ReplicaDescriptor,
-	statSummary *replicastats.RatedSummary,
+	usageInfo allocator.RangeUsageInfo,
 ) bool {
 	adjustments := make(map[roachpb.StoreID]float64)
-	decision, _ := a.shouldTransferLeaseForAccessLocality(ctx, source, existing, statSummary, adjustments, sl.CandidateLeases.Mean)
+	decision, _ := a.shouldTransferLeaseForAccessLocality(ctx, source, existing, usageInfo, adjustments, sl.CandidateLeases.Mean)
 	if decision == decideWithoutStats {
 		return false
 	}
@@ -2037,14 +2046,13 @@ func (a Allocator) shouldTransferLeaseForAccessLocality(
 	ctx context.Context,
 	source roachpb.StoreDescriptor,
 	existing []roachpb.ReplicaDescriptor,
-	statSummary *replicastats.RatedSummary,
+	usageInfo allocator.RangeUsageInfo,
 	rebalanceAdjustments map[roachpb.StoreID]float64,
 	candidateLeasesMean float64,
 ) (transferDecision, roachpb.ReplicaDescriptor) {
 	// Only use load-based rebalancing if it's enabled and we have both
 	// stats and locality information to base our decision on.
-	if statSummary == nil ||
-		statSummary.LocalityCounts == nil ||
+	if usageInfo.RequestLocality == nil ||
 		!enableLoadBasedLeaseRebalancing.Get(&a.StorePool.St.SV) {
 		return decideWithoutStats, roachpb.ReplicaDescriptor{}
 	}
@@ -2055,8 +2063,8 @@ func (a Allocator) shouldTransferLeaseForAccessLocality(
 		}
 	}
 
-	qpsStats := statSummary.LocalityCounts
-	qpsStatsDur := statSummary.Duration
+	qpsStats := usageInfo.RequestLocality.Counts
+	qpsStatsDur := usageInfo.RequestLocality.Duration
 
 	// If we haven't yet accumulated enough data, avoid transferring for now,
 	// unless we've been explicitly asked otherwise. Do not fall back to the

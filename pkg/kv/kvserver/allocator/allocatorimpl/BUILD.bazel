@@ -13,11 +13,11 @@ go_library(
     deps = [
         "//pkg/gossip",
         "//pkg/kv/kvserver/allocator",
+        "//pkg/kv/kvserver/allocator/state",
         "//pkg/kv/kvserver/allocator/storepool",
         "//pkg/kv/kvserver/constraint",
         "//pkg/kv/kvserver/liveness/livenesspb",
         "//pkg/kv/kvserver/raftutil",
-        "//pkg/kv/kvserver/replicastats",
         "//pkg/roachpb",
         "//pkg/settings",
         "//pkg/settings/cluster",
