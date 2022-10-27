@@ -624,7 +624,7 @@ func (rq *replicateQueue) shouldQueue(
 	voterReplicas := desc.Replicas().VoterDescriptors()
 	nonVoterReplicas := desc.Replicas().NonVoterDescriptors()
 	if !rq.store.TestingKnobs().DisableReplicaRebalancing {
-		rangeUsageInfo := rangeUsageInfoForRepl(repl)
+		rangeUsageInfo := RangeUsageInfoForRepl(repl)
 		_, _, _, ok := rq.allocator.RebalanceVoter(
 			ctx,
 			conf,
@@ -663,7 +663,7 @@ func (rq *replicateQueue) shouldQueue(
 			conf,
 			voterReplicas,
 			repl,
-			repl.loadStats.batchRequests.SnapshotRatedSummary(),
+			RangeUsageInfoForRepl(repl),
 		) {
 		log.KvDistribution.VEventf(ctx, 2, "lease transfer needed, enqueuing")
 		return true, 0
@@ -876,7 +876,7 @@ func (rq *replicateQueue) applyChange(ctx context.Context, change ReplicateQueue
 	case AllocationFinalizeAtomicReplicationOp:
 		err = rq.finalizeAtomicReplication(ctx, change.replica)
 	case AllocationTransferLeaseOp:
-		err = rq.TransferLease(ctx, change.replica, op.source, op.target, op.usage.QueriesPerSecond)
+		err = rq.TransferLease(ctx, change.replica, op.source, op.target, op.usage)
 	case AllocationChangeReplicasOp:
 		err = rq.changeReplicas(
 			ctx,
@@ -1338,7 +1338,7 @@ func (rq *replicateQueue) addOrReplaceVoters(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             rangeUsageInfoForRepl(repl),
+		usage:             RangeUsageInfoForRepl(repl),
 		chgs:              ops,
 		priority:          kvserverpb.SnapshotRequest_RECOVERY,
 		allocatorPriority: allocatorPriority,
@@ -1392,7 +1392,7 @@ func (rq *replicateQueue) addOrReplaceNonVoters(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             rangeUsageInfoForRepl(repl),
+		usage:             RangeUsageInfoForRepl(repl),
 		chgs:              ops,
 		priority:          kvserverpb.SnapshotRequest_RECOVERY,
 		allocatorPriority: allocatorPrio,
@@ -1530,7 +1530,7 @@ func (rq *replicateQueue) maybeTransferLeaseAwayTarget(
 		conf,
 		desc.Replicas().VoterDescriptors(),
 		repl,
-		repl.loadStats.batchRequests.SnapshotRatedSummary(),
+		RangeUsageInfoForRepl(repl),
 		false, /* forceDecisionWithoutStats */
 		allocator.TransferLeaseOptions{
 			Goal: allocator.LeaseCountConvergence,
@@ -1548,7 +1548,7 @@ func (rq *replicateQueue) maybeTransferLeaseAwayTarget(
 	op = AllocationTransferLeaseOp{
 		source:             repl.StoreID(),
 		target:             target.StoreID,
-		usage:              rangeUsageInfoForRepl(repl),
+		usage:              RangeUsageInfoForRepl(repl),
 		bypassSafetyChecks: false,
 	}
 
@@ -1588,7 +1588,7 @@ func (rq *replicateQueue) removeVoter(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             rangeUsageInfoForRepl(repl),
+		usage:             RangeUsageInfoForRepl(repl),
 		chgs:              roachpb.MakeReplicationChanges(roachpb.REMOVE_VOTER, removeVoter),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1629,7 +1629,7 @@ func (rq *replicateQueue) removeNonVoter(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             rangeUsageInfoForRepl(repl),
+		usage:             RangeUsageInfoForRepl(repl),
 		chgs:              roachpb.MakeReplicationChanges(roachpb.REMOVE_NON_VOTER, target),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1687,7 +1687,7 @@ func (rq *replicateQueue) removeDecommissioning(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             rangeUsageInfoForRepl(repl),
+		usage:             RangeUsageInfoForRepl(repl),
 		chgs:              roachpb.MakeReplicationChanges(targetType.RemoveChangeType(), target),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1730,7 +1730,7 @@ func (rq *replicateQueue) removeDead(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             rangeUsageInfoForRepl(repl),
+		usage:             RangeUsageInfoForRepl(repl),
 		chgs:              roachpb.MakeReplicationChanges(targetType.RemoveChangeType(), target),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1762,7 +1762,7 @@ func (rq *replicateQueue) considerRebalance(
 	if scatter {
 		scorerOpts = rq.allocator.ScorerOptionsForScatter(ctx)
 	}
-	rangeUsageInfo := rangeUsageInfoForRepl(repl)
+	rangeUsageInfo := RangeUsageInfoForRepl(repl)
 	addTarget, removeTarget, details, ok := rq.allocator.RebalanceVoter(
 		ctx,
 		conf,
@@ -1840,7 +1840,7 @@ func (rq *replicateQueue) considerRebalance(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             rangeUsageInfoForRepl(repl),
+		usage:             RangeUsageInfoForRepl(repl),
 		chgs:              chgs,
 		priority:          kvserverpb.SnapshotRequest_REBALANCE,
 		allocatorPriority: allocatorPrio,
@@ -1965,7 +1965,7 @@ func (rq *replicateQueue) shedLease(
 		conf,
 		desc.Replicas().VoterDescriptors(),
 		repl,
-		repl.loadStats.batchRequests.SnapshotRatedSummary(),
+		RangeUsageInfoForRepl(repl),
 		false, /* forceDecisionWithoutStats */
 		opts,
 	)
@@ -1973,11 +1973,7 @@ func (rq *replicateQueue) shedLease(
 		return allocator.NoSuitableTarget, nil
 	}
 
-	avgQPS, qpsMeasurementDur := repl.loadStats.batchRequests.AverageRatePerSecond()
-	if qpsMeasurementDur < replicastats.MinStatsDuration {
-		avgQPS = 0
-	}
-	if err := rq.TransferLease(ctx, repl, repl.store.StoreID(), target.StoreID, avgQPS); err != nil {
+	if err := rq.TransferLease(ctx, repl, repl.store.StoreID(), target.StoreID, RangeUsageInfoForRepl(repl)); err != nil {
 		return allocator.TransferErr, err
 	}
 	return allocator.TransferOK, nil
@@ -2004,7 +2000,7 @@ type RangeRebalancer interface {
 		ctx context.Context,
 		rlm ReplicaLeaseMover,
 		source, target roachpb.StoreID,
-		rangeQPS float64,
+		rangeUsageInfo allocator.RangeUsageInfo,
 	) error
 
 	// RelocateRange relocates replicas to the requested stores, and can transfer
@@ -2030,7 +2026,10 @@ func (rq *replicateQueue) finalizeAtomicReplication(ctx context.Context, repl *R
 
 // TransferLease implements the RangeRebalancer interface.
 func (rq *replicateQueue) TransferLease(
-	ctx context.Context, rlm ReplicaLeaseMover, source, target roachpb.StoreID, rangeQPS float64,
+	ctx context.Context,
+	rlm ReplicaLeaseMover,
+	source, target roachpb.StoreID,
+	rangeUsageInfo allocator.RangeUsageInfo,
 ) error {
 	rq.metrics.TransferLeaseCount.Inc(1)
 	log.KvDistribution.Infof(ctx, "transferring lease to s%d", target)
@@ -2038,7 +2037,7 @@ func (rq *replicateQueue) TransferLease(
 		return errors.Wrapf(err, "%s: unable to transfer lease to s%d", rlm, target)
 	}
 
-	rq.allocator.StorePool.UpdateLocalStoresAfterLeaseTransfer(source, target, rangeQPS)
+	rq.allocator.StorePool.UpdateLocalStoresAfterLeaseTransfer(source, target, rangeUsageInfo)
 	rq.lastLeaseTransfer.Store(timeutil.Now())
 	return nil
 }
@@ -2146,13 +2145,26 @@ func rangeRaftProgress(raftStatus *raft.Status, replicas []roachpb.ReplicaDescri
 	return buf.String()
 }
 
-func rangeUsageInfoForRepl(repl *Replica) allocator.RangeUsageInfo {
+// RangeUsageInfoForRepl returns the usage information for the replica,
+// assigning it to the range usage information.
+// NB: This is currently just the replicas usage, it assumes that the range's
+// usage information matches. Which is dubious in some cases but often
+// reasoanble when we only consider the leaseholder.
+func RangeUsageInfoForRepl(repl *Replica) allocator.RangeUsageInfo {
 	info := allocator.RangeUsageInfo{
 		LogicalBytes: repl.GetMVCCStats().Total(),
 	}
-	if queriesPerSecond, dur := repl.loadStats.batchRequests.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
-		info.QueriesPerSecond = queriesPerSecond
+
+	localitySummary := repl.loadStats.batchRequests.SnapshotRatedSummary()
+	info.RequestLocality = &allocator.RangeRequestLocalityInfo{
+		Counts:   localitySummary.LocalityCounts,
+		Duration: localitySummary.Duration,
 	}
+
+	if localitySummary.Duration >= replicastats.MinStatsDuration {
+		info.QueriesPerSecond = localitySummary.QPS
+	}
+
 	if writesPerSecond, dur := repl.loadStats.writeKeys.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
 		info.WritesPerSecond = writesPerSecond
 	}
