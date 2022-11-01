@@ -3040,7 +3040,7 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	var rangeCount int32
 	var logicalBytes int64
 	var l0SublevelsMax int64
-	var totalQueriesPerSecond float64
+	var totalCPUPerSecond float64
 	var totalWritesPerSecond float64
 	replicaCount := s.metrics.ReplicaCount.Value()
 	bytesPerReplica := make([]float64, 0, replicaCount)
@@ -3061,11 +3061,10 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 		// incorrectly low the first time or two it gets gossiped when a store
 		// starts? We can't easily have a countdown as its value changes like for
 		// leases/replicas.
-		var qps float64
-		if avgQPS, dur := r.loadStats.batchRequests.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
-			qps = avgQPS
-			totalQueriesPerSecond += avgQPS
-			// TODO(a-robinson): Calculate percentiles for qps? Get rid of other percentiles?
+		var cpu float64
+		if avgCPU, dur := r.loadStats.nanos.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
+			cpu = avgCPU
+			totalCPUPerSecond += avgCPU
 		}
 		if wps, dur := r.loadStats.writeKeys.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
 			totalWritesPerSecond += wps
@@ -3073,14 +3072,14 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 		}
 		rankingsAccumulator.AddReplica(candidateReplica{
 			Replica: r,
-			qps:     qps,
+			qps:     cpu,
 		})
 		return true
 	})
 	capacity.RangeCount = rangeCount
 	capacity.LeaseCount = leaseCount
 	capacity.LogicalBytes = logicalBytes
-	capacity.QueriesPerSecond = totalQueriesPerSecond
+	capacity.QueriesPerSecond = totalCPUPerSecond
 	capacity.WritesPerSecond = totalWritesPerSecond
 	capacity.L0Sublevels = l0SublevelsMax
 	{
@@ -3090,7 +3089,7 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	}
 	capacity.BytesPerReplica = roachpb.PercentilesFromData(bytesPerReplica)
 	capacity.WritesPerReplica = roachpb.PercentilesFromData(writesPerReplica)
-	s.recordNewPerSecondStats(totalQueriesPerSecond, totalWritesPerSecond)
+	s.recordNewPerSecondStats(totalCPUPerSecond, totalWritesPerSecond)
 	s.replRankings.Update(rankingsAccumulator)
 
 	s.cachedCapacity.Lock()

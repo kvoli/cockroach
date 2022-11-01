@@ -2094,7 +2094,7 @@ func init() {
 // RecordNanosRunning records the given duration against the replica's cpu time
 // accounting.
 func (r *Replica) RecordNanosRunning(duration int64) {
-	r.loadStats.nanos.RecordCount(float64(duration), 0 /* nodeID */)
+	r.loadStats.nanos.RecordCount(float64(duration)/1000, 0 /* nodeID */)
 }
 
 // ReadProtectedTimestampsForTesting is for use only by tests to read and update

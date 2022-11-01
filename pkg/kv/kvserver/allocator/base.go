@@ -34,7 +34,7 @@ const (
 	// less than this amount even if the amount is greater than the percentage
 	// threshold. This avoids too many lease transfers / range rebalances in
 	// lightly loaded clusters.
-	MinQPSThresholdDifference = 100
+	MinQPSThresholdDifference = 200 * (1000) // 200ms
 
 	// defaultLoadBasedRebalancingInterval is how frequently to check the store-level
 	// balance of the cluster.
@@ -86,7 +86,7 @@ var QPSRebalanceThreshold = func() *settings.FloatSetting {
 		settings.SystemOnly,
 		"kv.allocator.qps_rebalance_threshold",
 		"minimum fraction away from the mean a store's QPS (such as queries per second) can be before it is considered overfull or underfull",
-		0.10,
+		0.15,
 		settings.NonNegativeFloat,
 		func(f float64) error {
 			if f < 0.01 {

@@ -1814,11 +1814,11 @@ func (rq *replicateQueue) shedLease(
 		return allocator.NoTransferDryRun, nil
 	}
 
-	avgQPS, qpsMeasurementDur := repl.loadStats.batchRequests.AverageRatePerSecond()
-	if qpsMeasurementDur < replicastats.MinStatsDuration {
-		avgQPS = 0
+	avgCPU, cpuMeasurementDur := repl.loadStats.nanos.AverageRatePerSecond()
+	if cpuMeasurementDur < replicastats.MinStatsDuration {
+		avgCPU = 0
 	}
-	if err := rq.TransferLease(ctx, repl, repl.store.StoreID(), target.StoreID, avgQPS); err != nil {
+	if err := rq.TransferLease(ctx, repl, repl.store.StoreID(), target.StoreID, avgCPU); err != nil {
 		return allocator.TransferErr, err
 	}
 	return allocator.TransferOK, nil
@@ -1987,7 +1987,7 @@ func rangeUsageInfoForRepl(repl *Replica) allocator.RangeUsageInfo {
 	info := allocator.RangeUsageInfo{
 		LogicalBytes: repl.GetMVCCStats().Total(),
 	}
-	if queriesPerSecond, dur := repl.loadStats.batchRequests.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
+	if queriesPerSecond, dur := repl.loadStats.nanos.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
 		info.QueriesPerSecond = queriesPerSecond
 	}
 	if writesPerSecond, dur := repl.loadStats.writeKeys.AverageRatePerSecond(); dur >= replicastats.MinStatsDuration {
