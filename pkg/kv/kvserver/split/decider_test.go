@@ -473,3 +473,26 @@ func TestDeciderMetrics(t *testing.T) {
 	assert.Equal(t, dAllInsufficientCounters.loadSplitterMetrics.PopularKeyCount.Count(), int64(0))
 	assert.Equal(t, dAllInsufficientCounters.loadSplitterMetrics.NoSplitKeyCount.Count(), int64(0))
 }
+
+func TestDeciderInitFinder(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	intn := rand.New(rand.NewSource(11)).Intn
+	timeStart := 1000
+
+	testCases := []struct{
+		ticks []int64
+		record []float64
+		finderExpected float64
+	}{
+		{}
+	}
+
+	var d Decider
+	Init(&d, intn, func() float64 { return 10.0 }, func() time.Duration { return time.Second }, &LoadSplitterMetrics{
+		PopularKeyCount: metric.NewCounter(metric.Metadata{}),
+		NoSplitKeyCount: metric.NewCounter(metric.Metadata{}),
+	})
+
+
+
+}

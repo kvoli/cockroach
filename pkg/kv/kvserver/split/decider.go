@@ -140,18 +140,11 @@ func (d *Decider) recordLocked(
 		d.mu.maxQPS.record(now, d.qpsRetention(), d.mu.lastQPS)
 
 		// If the QPS for the range exceeds the threshold, start actively
-		// tracking potential for splitting this range based on load.
-		// This tracking will begin by initiating a splitFinder so it can
-		// begin to Record requests so it can find a split point. If a
-		// splitFinder already exists, we check if a split point is ready
-		// to be used.
-		if d.mu.lastQPS >= d.qpsThreshold() {
-			if d.mu.splitFinder == nil {
-				d.mu.splitFinder = NewFinder(now)
-			}
-		} else {
-			d.mu.splitFinder = nil
-		}
+		// tracking potential for splitting this range based on load. This
+		// tracking will begin by initiating a splitFinder so it can begin to
+		// Record requests so it can find a split point. If a splitFinder
+		// already exists, we check if a split point is ready to be used.
+		d.handleFinderInitLocked(now)
 	}
 
 	if d.mu.splitFinder != nil && n != 0 {
@@ -282,6 +275,45 @@ func (d *Decider) Reset(now time.Time) {
 	d.mu.splitFinder = nil
 	d.mu.lastSplitSuggestion = time.Time{}
 	d.mu.lastNoSplitKeyLoggingMetrics = time.Time{}
+}
+
+// handleFinderInitLocked handes the finder lifecycle. It initiaizes the finder
+// whenever the last recorded QPS exceeds the threshold. It destroys the finder
+// when.the recorded QPS rate doesn't exceed the threshold after the
+// RecordDurationThreshold. This prevents finders from sticking around for too
+// long if they do not satisfy the threshold while also avoiding prematurely
+// destroying the finder in cases where the recording occurs in bursts over the
+// RecordDurationThreshold period.
+//
+// NB: If the period between recording is longer than RecordDurationThreshold,
+// then it is still possible that the finder will be reset despite satisfying
+// the necessary threshold over a longer window. Currently this window is set
+// to 10 seconds.
+func (d *Decider) handleFinderInitLocked(now time.Time) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	finderInitiaized := d.mu.splitFinder != nil
+	satisfiesThreshold := d.mu.lastQPS >= d.qpsThreshold()
+	if !satisfiesThreshold && !finderInitiaized {
+		return
+	}
+
+	if !finderInitiaized {
+		d.mu.splitFinder = NewFinder(now)
+	}
+
+	// If the finder has been initialized for longer than the minimum time
+	// required to suggest a split (RecordDurationThreshold) and the record
+	// rate was below the threshold then destroy the finder.
+	if !satisfiesThreshold {
+		recordDuration := now.Sub(d.mu.splitFinder.startTime)
+		recordRate := float64(d.mu.splitFinder.count) / recordDuration.Seconds()
+
+		if recordDuration > RecordDurationThreshold && recordRate < d.qpsThreshold() {
+			d.mu.splitFinder = nil
+		}
+	}
 }
 
 // maxQPSTracker collects a series of queries-per-second measurement samples and
