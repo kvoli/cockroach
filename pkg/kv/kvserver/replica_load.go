@@ -19,6 +19,12 @@ import (
 // avoid consuming unnecessary memory. There are individual locks and locality
 // tracking structs on all replicastats objects that are only needed on one.
 // This is tracked in #87187.
+//
+// refactor design
+// goals: 
+//   1. reduce per-replica memory footprint
+//   2. remove redundant features
+//   3. implement behind an interface
 
 // ReplicaLoad tracks a sliding window of throughput on a replica. By default,
 // there are 6, 5 minute sliding windows.
