@@ -690,7 +690,7 @@ func TestAllocatorReadAmpCheck(t *testing.T) {
 			sg.GossipStores(test.stores, t)
 
 			// Enable read disk health checking in candidate exclusion.
-			l0SublevelsThresholdEnforce.Override(ctx, &a.st.SV, int64(test.enforcement))
+			IOOverloadThresholdEnforce.Override(ctx, &a.st.SV, int64(test.enforcement))
 
 			// Allocate a voter where all replicas are alive (e.g. up-replicating a valid range).
 			add, _, err := a.AllocateVoter(

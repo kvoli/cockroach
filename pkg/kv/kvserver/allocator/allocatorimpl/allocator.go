@@ -1719,10 +1719,10 @@ func (a *Allocator) leaseholderShouldMoveDueToPreferences(
 // storeHealthLogOnly. By default storeHealthBlockRebalanceTo is the action taken. When
 // there is a mixed version cluster, storeHealthNoAction is set instead.
 func (a *Allocator) StoreHealthOptions(_ context.Context) StoreHealthOptions {
-	enforcementLevel := StoreHealthEnforcement(l0SublevelsThresholdEnforce.Get(&a.st.SV))
+	enforcementLevel := StoreHealthEnforcement(IOOverloadThresholdEnforce.Get(&a.st.SV))
 	return StoreHealthOptions{
 		EnforcementLevel:    enforcementLevel,
-		L0SublevelThreshold: l0SublevelsThreshold.Get(&a.st.SV),
+		IOOverloadThreshold: IOOverloadScoreThreshold.Get(&a.st.SV),
 	}
 }
 

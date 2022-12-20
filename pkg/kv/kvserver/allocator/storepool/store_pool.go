@@ -930,9 +930,9 @@ type StoreList struct {
 	// eligible to be rebalance targets.
 	candidateWritesPerSecond Stat
 
-	// candidateWritesPerSecond tracks L0 sub-level stats for Stores that are
-	// eligible to be rebalance targets.
-	CandidateL0Sublevels Stat
+	// candidateIOOverloadScore tracks IO overload score stats for Stores that
+	// are eligible to rebalance targets.
+	CandidateIOOverloadScore Stat
 }
 
 // MakeStoreList constructs a new store list based on the passed in descriptors.
@@ -947,7 +947,8 @@ func MakeStoreList(descriptors []roachpb.StoreDescriptor) StoreList {
 		sl.candidateLogicalBytes.update(float64(desc.Capacity.LogicalBytes))
 		sl.CandidateQueriesPerSecond.update(desc.Capacity.QueriesPerSecond)
 		sl.candidateWritesPerSecond.update(desc.Capacity.WritesPerSecond)
-		sl.CandidateL0Sublevels.update(float64(desc.Capacity.L0Sublevels))
+		ioOverloadScore, _ := desc.Capacity.IOThreshold.Score()
+		sl.CandidateIOOverloadScore.update(ioOverloadScore)
 	}
 	return sl
 }
@@ -966,12 +967,14 @@ func (sl StoreList) String() string {
 	} else {
 		fmt.Fprintf(&buf, " <no candidates>")
 	}
+
 	for _, desc := range sl.Stores {
-		fmt.Fprintf(&buf, "  %d: ranges=%d leases=%d disk-usage=%s queries-per-second=%.2f l0-sublevels=%d\n",
+		ioScore, _ := desc.Capacity.IOThreshold.Score()
+		fmt.Fprintf(&buf, "  %d: ranges=%d leases=%d disk-usage=%s queries-per-second=%.2f io-overload-score=%f\n",
 			desc.StoreID, desc.Capacity.RangeCount,
 			desc.Capacity.LeaseCount, humanizeutil.IBytes(desc.Capacity.LogicalBytes),
 			desc.Capacity.QueriesPerSecond,
-			desc.Capacity.L0Sublevels,
+			ioScore,
 		)
 	}
 	return buf.String()
