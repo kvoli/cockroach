@@ -16,14 +16,16 @@ type Dimension int
 const (
 	// Queries refers to the number of queries.
 	Queries Dimension = iota
+	CPUTime
 )
 
 const (
-	nDimensions = 1
+	nDimensions = 2
 )
 
 // DimensionNames contains a mapping of a load dimension, to a human
 // readable string.
 var DimensionNames = map[Dimension]string{
 	Queries: "queries-per-second",
+	CPUTime: "cpu-nanos-per-second",
 }

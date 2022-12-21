@@ -80,9 +80,10 @@ var LoadBasedRebalancingDimension = settings.RegisterEnumSetting(
 	settings.SystemOnly,
 	"kv.allocator.load_based_rebalancing_dimension",
 	"what dimension of load does rebalancing consider",
-	"qps",
+	"cpu",
 	map[int64]string{
 		int64(LBRebalancingQueries): "qps",
+		int64(LBRebalancingCPUTime): "cpu",
 	},
 ).WithPublic()
 
@@ -108,12 +109,18 @@ type LBRebalancingDimension int64
 const (
 	// LBRebalancingQueries is a rebalancing mode that balances queries (QPS).
 	LBRebalancingQueries LBRebalancingDimension = iota
+
+	// LBRebalancingCPUTime  is a rebalancing mode that balances cpu time per
+	// second.
+	LBRebalancingCPUTime
 )
 
 func (d LBRebalancingDimension) toDimension() load.Dimension {
 	switch d {
 	case LBRebalancingQueries:
 		return load.Queries
+	case LBRebalancingCPUTime:
+		return load.CPUTime
 	default:
 		panic("unknown dimension")
 	}
@@ -538,7 +545,7 @@ func (sr *StoreRebalancer) TransferToRebalanceRanges(
 ) bool {
 	if rctx.LessThanMaxThresholds() {
 		log.KvDistribution.Infof(ctx,
-			"load-based lease transfers successfully brought s%d down to %s load (mean=%s, upperThreshold=%s)",
+			"load-based lease transfers successfully brought s%d down to %s load, mean=%s, upperThreshold=%s",
 			rctx.LocalDesc.StoreID, rctx.LocalDesc.Capacity.Load(),
 			rctx.allStoresList.LoadMeans(), rctx.maxThresholds)
 		return false
@@ -694,17 +701,17 @@ func (sr *StoreRebalancer) chooseLeaseToTransfer(
 		// store's load. It's just unnecessary churn with no benefit to move leases
 		// responsible for, for example, 1 load unit on a store with 5000 load units.
 		const minLoadFraction = .001
-		if candidateReplica.RangeUsageInfo().Load().Dim(rctx.loadDimension) <
+		if candidateReplica.RangeUsageInfo().TransferImpact().Dim(rctx.loadDimension) <
 			rctx.LocalDesc.Capacity.Load().Dim(rctx.loadDimension)*minLoadFraction {
 			log.KvDistribution.VEventf(ctx, 3, "r%d's %s load is too little to matter relative to s%d's %s total load",
-				candidateReplica.GetRangeID(), candidateReplica.RangeUsageInfo().Load(),
+				candidateReplica.GetRangeID(), candidateReplica.RangeUsageInfo().TransferImpact(),
 				rctx.LocalDesc.StoreID, rctx.LocalDesc.Capacity.Load())
 			continue
 		}
 
 		desc, conf := candidateReplica.DescAndSpanConfig()
 		log.KvDistribution.VEventf(ctx, 3, "considering lease transfer for r%d with %s load",
-			desc.RangeID, candidateReplica.RangeUsageInfo().Load())
+			desc.RangeID, candidateReplica.RangeUsageInfo().TransferImpact())
 
 		// Check all the other voting replicas in order of increasing load.
 		// Learners or non-voters aren't allowed to become leaseholders or raft
@@ -764,7 +771,7 @@ func (sr *StoreRebalancer) chooseLeaseToTransfer(
 				1,
 				"transferring lease for r%d load=%s to store s%d load=%s from local store s%d load=%s",
 				desc.RangeID,
-				candidateReplica.RangeUsageInfo().Load(),
+				candidateReplica.RangeUsageInfo().TransferImpact(),
 				targetStore.StoreID,
 				targetStore.Capacity.Load(),
 				rctx.LocalDesc.StoreID,
@@ -1031,7 +1038,7 @@ func (sr *StoreRebalancer) getRebalanceTargetsBasedOnLoad(
 		log.KvDistribution.VEventf(
 			ctx,
 			3,
-			"rebalancing voter (load=%s) for r%d on %v to %v in order to improve load balance",
+			"rebalancing voter load=%s for r%d on %v to %v in order to improve load balance",
 			rbCtx.candidateReplica.RangeUsageInfo().Load(),
 			rbCtx.rangeDesc.RangeID,
 			remove,
