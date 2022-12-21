@@ -46,6 +46,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvstorage"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness/livenesspb"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/load"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/multiqueue"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/raftentry"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/rangefeed"
@@ -782,6 +783,7 @@ type Store struct {
 		heartbeats         map[roachpb.StoreIdent][]kvserverpb.RaftHeartbeat
 		heartbeatResponses map[roachpb.StoreIdent][]kvserverpb.RaftHeartbeat
 	}
+
 	// 1 if the store was started, 0 if it wasn't. To be accessed using atomic
 	// ops.
 	started int32
@@ -1111,6 +1113,12 @@ type StoreConfig struct {
 	// that's then used to adjust various admission control components (like how
 	// many CPU tokens are granted to elastic work like backups).
 	SchedulerLatencyListener admission.SchedulerLatencyListener
+
+	// StoreLoad... XXX
+	StoreLoadStatsGetter load.StoreLoadStatsGetter
+
+	// StoreCPURateListener ... XXX
+	StoreCPURateListener load.StoreCPURateListener
 
 	// SystemConfigProvider is used to drive replication decision-making in the
 	// mixed-version state, before the span configuration infrastructure has been
@@ -2902,6 +2910,7 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	var l0SublevelsMax int64
 	var totalQueriesPerSecond float64
 	var totalWritesPerSecond float64
+	var totalCPUTimePerSecond float64
 	replicaCount := s.metrics.ReplicaCount.Value()
 	bytesPerReplica := make([]float64, 0, replicaCount)
 	writesPerReplica := make([]float64, 0, replicaCount)
@@ -2926,10 +2935,20 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 		// TODO(a-robinson): Calculate percentiles for qps? Get rid of other percentiles?
 		totalQueriesPerSecond += usage.QueriesPerSecond
 		totalWritesPerSecond += usage.WritesPerSecond
+		totalCPUTimePerSecond += usage.RaftCPUNanosPerSecond + usage.ReqCPUNanosPerSecond
 		writesPerReplica = append(writesPerReplica, usage.WritesPerSecond)
+		return true
+	})
+
+	// XXX
+	s.cfg.StoreCPURateListener.StoreCPURate(totalCPUTimePerSecond, s.StoreID())
+	storeLoadStats := s.cfg.StoreLoadStatsGetter.Stats()
+
+	newStoreReplicaVisitor(s).Visit(func(r *Replica) bool {
+		usage := RangeUsageInfoForRepl(r)
 		cr := candidateReplica{
 			Replica: r,
-			usage:   usage,
+			usage:   ScaleRangeUsageInfo(usage, storeLoadStats),
 		}
 		rankingsAccumulator.AddReplica(cr)
 		rankingsByTenantAccumulator.AddReplica(cr)
@@ -2941,6 +2960,9 @@ func (s *Store) Capacity(ctx context.Context, useCached bool) (roachpb.StoreCapa
 	capacity.QueriesPerSecond = totalQueriesPerSecond
 	capacity.WritesPerSecond = totalWritesPerSecond
 	capacity.L0Sublevels = l0SublevelsMax
+	capacity.CpuPerSecond = storeLoadStats.ReplicaCPUNanosPerSecond
+	capacity.NodeCpuPerSecond = storeLoadStats.RuntimeCPUNanosPerSecond
+	log.KvDistribution.Infof(ctx, "updated capacity load %s", capacity.Load())
 	{
 		s.ioThreshold.Lock()
 		capacity.IOThreshold = *s.ioThreshold.t
@@ -3147,7 +3169,7 @@ func (s *Store) updateReplicationGauges(ctx context.Context) error {
 		averageReadsPerSecond += loadStats.ReadKeysPerSecond
 		averageReadBytesPerSecond += loadStats.ReadBytesPerSecond
 		averageWriteBytesPerSecond += loadStats.WriteBytesPerSecond
-		averageCPUNanosPerSecond += loadStats.CPUNanosPerSecond
+		averageCPUNanosPerSecond += loadStats.RaftCPUNanosPerSecond + loadStats.RequestCPUNanosPerSecond
 
 		locks += metrics.LockTableMetrics.Locks
 		totalLockHoldDurationNanos += metrics.LockTableMetrics.TotalLockHoldDurationNanos
@@ -3186,6 +3208,7 @@ func (s *Store) updateReplicationGauges(ctx context.Context) error {
 	s.metrics.AverageWriteBytesPerSecond.Update(averageWriteBytesPerSecond)
 	s.metrics.AverageCPUNanosPerSecond.Update(averageCPUNanosPerSecond)
 	s.recordNewPerSecondStats(averageQueriesPerSecond, averageWritesPerSecond)
+	s.metrics.AverageRuntimeCPUNanosPerSecond.Update(s.cfg.StoreLoadStatsGetter.Stats().RuntimeCPUNanosPerSecond)
 
 	s.metrics.RangeCount.Update(rangeCount)
 	s.metrics.UnavailableRangeCount.Update(unavailableRangeCount)

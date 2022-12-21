@@ -577,13 +577,20 @@ func (sp *StorePool) UpdateLocalStoreAfterRebalance(
 		// network). We can't update the local store at this time.
 		return
 	}
+	// XXX: Need to scale the estimate impact here
 	switch changeType {
 	case roachpb.ADD_VOTER, roachpb.ADD_NON_VOTER:
 		detail.Desc.Capacity.RangeCount++
 		detail.Desc.Capacity.LogicalBytes += rangeUsageInfo.LogicalBytes
 		detail.Desc.Capacity.WritesPerSecond += rangeUsageInfo.WritesPerSecond
+		detail.Desc.Capacity.NodeCpuPerSecond += rangeUsageInfo.RaftCPUNanosPerSecond
 	case roachpb.REMOVE_VOTER, roachpb.REMOVE_NON_VOTER:
 		detail.Desc.Capacity.RangeCount--
+		if detail.Desc.Capacity.NodeCpuPerSecond <= rangeUsageInfo.RaftCPUNanosPerSecond {
+			detail.Desc.Capacity.NodeCpuPerSecond = 0
+		} else {
+			detail.Desc.Capacity.NodeCpuPerSecond -= rangeUsageInfo.RaftCPUNanosPerSecond
+		}
 		if detail.Desc.Capacity.LogicalBytes <= rangeUsageInfo.LogicalBytes {
 			detail.Desc.Capacity.LogicalBytes = 0
 		} else {
@@ -622,10 +629,15 @@ func (sp *StorePool) UpdateLocalStoreAfterRelocate(
 	sp.DetailsMu.Lock()
 	defer sp.DetailsMu.Unlock()
 
+	// XXX: Need to scale the estimate impact here
+	// rangeUsageInfo.TransferImpactScaled()
+	// rangeUsageInfo.RebalanceImpactScaled()
+
 	updateTargets := func(targets []roachpb.ReplicationTarget) {
 		for _, target := range targets {
 			if toDetail := sp.GetStoreDetailLocked(target.StoreID); toDetail != nil {
 				toDetail.Desc.Capacity.RangeCount++
+				toDetail.Desc.Capacity.NodeCpuPerSecond += rangeUsageInfo.RaftCPUNanosPerSecond
 			}
 		}
 	}
@@ -633,6 +645,7 @@ func (sp *StorePool) UpdateLocalStoreAfterRelocate(
 		for _, old := range previous {
 			if toDetail := sp.GetStoreDetailLocked(old.StoreID); toDetail != nil {
 				toDetail.Desc.Capacity.RangeCount--
+				toDetail.Desc.Capacity.NodeCpuPerSecond -= rangeUsageInfo.RaftCPUNanosPerSecond
 			}
 		}
 	}
@@ -651,6 +664,9 @@ func (sp *StorePool) UpdateLocalStoresAfterLeaseTransfer(
 	sp.DetailsMu.Lock()
 	defer sp.DetailsMu.Unlock()
 
+	// XXX: Need to scale the estimate impact here
+	// rangeUsageInfo.TransferImpactScaled()
+
 	fromDetail := *sp.GetStoreDetailLocked(from)
 	if fromDetail.Desc != nil {
 		fromDetail.Desc.Capacity.LeaseCount--
@@ -659,6 +675,11 @@ func (sp *StorePool) UpdateLocalStoresAfterLeaseTransfer(
 		} else {
 			fromDetail.Desc.Capacity.QueriesPerSecond -= rangeUsageInfo.QueriesPerSecond
 		}
+		if fromDetail.Desc.Capacity.NodeCpuPerSecond < rangeUsageInfo.ReqCPUNanosPerSecond {
+			fromDetail.Desc.Capacity.NodeCpuPerSecond = 0
+		} else {
+			fromDetail.Desc.Capacity.NodeCpuPerSecond -= rangeUsageInfo.ReqCPUNanosPerSecond
+		}
 		sp.DetailsMu.StoreDetails[from] = &fromDetail
 	}
 
@@ -666,6 +687,7 @@ func (sp *StorePool) UpdateLocalStoresAfterLeaseTransfer(
 	if toDetail.Desc != nil {
 		toDetail.Desc.Capacity.LeaseCount++
 		toDetail.Desc.Capacity.QueriesPerSecond += rangeUsageInfo.QueriesPerSecond
+		toDetail.Desc.Capacity.NodeCpuPerSecond += rangeUsageInfo.ReqCPUNanosPerSecond
 		sp.DetailsMu.StoreDetails[to] = &toDetail
 	}
 }
@@ -946,6 +968,8 @@ type StoreList struct {
 	// candidateWritesPerSecond tracks L0 sub-level stats for Stores that are
 	// eligible to be rebalance targets.
 	CandidateL0Sublevels Stat
+
+	CandidateCPUTime Stat
 }
 
 // MakeStoreList constructs a new store list based on the passed in descriptors.
@@ -961,6 +985,7 @@ func MakeStoreList(descriptors []roachpb.StoreDescriptor) StoreList {
 		sl.CandidateQueriesPerSecond.update(desc.Capacity.QueriesPerSecond)
 		sl.candidateWritesPerSecond.update(desc.Capacity.WritesPerSecond)
 		sl.CandidateL0Sublevels.update(float64(desc.Capacity.L0Sublevels))
+		sl.CandidateCPUTime.update(desc.Capacity.NodeCpuPerSecond)
 	}
 	return sl
 }
@@ -1010,6 +1035,7 @@ func (sl StoreList) ExcludeInvalid(constraints []roachpb.ConstraintsConjunction)
 func (sl StoreList) LoadMeans() load.Load {
 	dims := load.Vector{}
 	dims[load.Queries] = sl.CandidateQueriesPerSecond.Mean
+	dims[load.CPUTime] = sl.CandidateCPUTime.Mean
 	return dims
 }
 

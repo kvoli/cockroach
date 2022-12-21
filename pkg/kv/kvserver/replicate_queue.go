@@ -23,6 +23,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverpb"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness/livenesspb"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/load"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/settings"
 	"github.com/cockroachdb/cockroach/pkg/spanconfig"
@@ -629,7 +630,7 @@ func (rq *replicateQueue) shouldQueue(
 	voterReplicas := desc.Replicas().VoterDescriptors()
 	nonVoterReplicas := desc.Replicas().NonVoterDescriptors()
 	if !rq.store.TestingKnobs().DisableReplicaRebalancing {
-		rangeUsageInfo := RangeUsageInfoForRepl(repl)
+		rangeUsageInfo := rq.ScaledRangeUsageInfo(repl)
 		_, _, _, ok := rq.allocator.RebalanceVoter(
 			ctx,
 			rq.storePool,
@@ -671,7 +672,7 @@ func (rq *replicateQueue) shouldQueue(
 			conf,
 			voterReplicas,
 			repl,
-			RangeUsageInfoForRepl(repl),
+			rq.ScaledRangeUsageInfo(repl),
 		) {
 		log.KvDistribution.VEventf(ctx, 2, "lease transfer needed, enqueuing")
 		return true, 0
@@ -1318,7 +1319,7 @@ func (rq *replicateQueue) addOrReplaceVoters(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             RangeUsageInfoForRepl(repl),
+		usage:             rq.ScaledRangeUsageInfo(repl),
 		chgs:              ops,
 		priority:          kvserverpb.SnapshotRequest_RECOVERY,
 		allocatorPriority: allocatorPriority,
@@ -1372,7 +1373,7 @@ func (rq *replicateQueue) addOrReplaceNonVoters(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             RangeUsageInfoForRepl(repl),
+		usage:             rq.ScaledRangeUsageInfo(repl),
 		chgs:              ops,
 		priority:          kvserverpb.SnapshotRequest_RECOVERY,
 		allocatorPriority: allocatorPrio,
@@ -1512,7 +1513,7 @@ func (rq *replicateQueue) maybeTransferLeaseAwayTarget(
 		conf,
 		desc.Replicas().VoterDescriptors(),
 		repl,
-		RangeUsageInfoForRepl(repl),
+		rq.ScaledRangeUsageInfo(repl),
 		false, /* forceDecisionWithoutStats */
 		allocator.TransferLeaseOptions{
 			Goal: allocator.LeaseCountConvergence,
@@ -1530,7 +1531,7 @@ func (rq *replicateQueue) maybeTransferLeaseAwayTarget(
 	op = AllocationTransferLeaseOp{
 		source:             repl.StoreID(),
 		target:             target.StoreID,
-		usage:              RangeUsageInfoForRepl(repl),
+		usage:              rq.ScaledRangeUsageInfo(repl),
 		bypassSafetyChecks: false,
 	}
 
@@ -1570,7 +1571,7 @@ func (rq *replicateQueue) removeVoter(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             RangeUsageInfoForRepl(repl),
+		usage:             rq.ScaledRangeUsageInfo(repl),
 		chgs:              roachpb.MakeReplicationChanges(roachpb.REMOVE_VOTER, removeVoter),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1612,7 +1613,7 @@ func (rq *replicateQueue) removeNonVoter(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             RangeUsageInfoForRepl(repl),
+		usage:             rq.ScaledRangeUsageInfo(repl),
 		chgs:              roachpb.MakeReplicationChanges(roachpb.REMOVE_NON_VOTER, target),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1670,7 +1671,7 @@ func (rq *replicateQueue) removeDecommissioning(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             RangeUsageInfoForRepl(repl),
+		usage:             rq.ScaledRangeUsageInfo(repl),
 		chgs:              roachpb.MakeReplicationChanges(targetType.RemoveChangeType(), target),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1713,7 +1714,7 @@ func (rq *replicateQueue) removeDead(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             RangeUsageInfoForRepl(repl),
+		usage:             rq.ScaledRangeUsageInfo(repl),
 		chgs:              roachpb.MakeReplicationChanges(targetType.RemoveChangeType(), target),
 		priority:          kvserverpb.SnapshotRequest_UNKNOWN, // unused
 		allocatorPriority: 0.0,                                // unused
@@ -1745,7 +1746,7 @@ func (rq *replicateQueue) considerRebalance(
 	if scatter {
 		scorerOpts = rq.allocator.ScorerOptionsForScatter(ctx)
 	}
-	rangeUsageInfo := RangeUsageInfoForRepl(repl)
+	rangeUsageInfo := rq.ScaledRangeUsageInfo(repl)
 	addTarget, removeTarget, details, ok := rq.allocator.RebalanceVoter(
 		ctx,
 		rq.storePool,
@@ -1841,7 +1842,7 @@ func (rq *replicateQueue) considerRebalance(
 	op = AllocationChangeReplicasOp{
 		lhStore:           repl.StoreID(),
 		sideEffects:       effects.f(),
-		usage:             RangeUsageInfoForRepl(repl),
+		usage:             rq.ScaledRangeUsageInfo(repl),
 		chgs:              chgs,
 		priority:          kvserverpb.SnapshotRequest_REBALANCE,
 		allocatorPriority: allocatorPrio,
@@ -1959,7 +1960,7 @@ func (rq *replicateQueue) shedLeaseTarget(
 	conf roachpb.SpanConfig,
 	opts allocator.TransferLeaseOptions,
 ) (op AllocationOp) {
-	usage := RangeUsageInfoForRepl(repl)
+	usage := rq.ScaledRangeUsageInfo(repl)
 	// Learner replicas aren't allowed to become the leaseholder or raft leader,
 	// so only consider the `VoterDescriptors` replicas.
 	target := rq.allocator.TransferLeaseTarget(
@@ -2003,7 +2004,7 @@ func (rq *replicateQueue) shedLease(
 		conf,
 		desc.Replicas().VoterDescriptors(),
 		repl,
-		RangeUsageInfoForRepl(repl),
+		rq.ScaledRangeUsageInfo(repl),
 		false, /* forceDecisionWithoutStats */
 		opts,
 	)
@@ -2011,7 +2012,7 @@ func (rq *replicateQueue) shedLease(
 		return allocator.NoSuitableTarget, nil
 	}
 
-	if err := rq.TransferLease(ctx, repl, repl.store.StoreID(), target.StoreID, RangeUsageInfoForRepl(repl)); err != nil {
+	if err := rq.TransferLease(ctx, repl, repl.store.StoreID(), target.StoreID, rq.ScaledRangeUsageInfo(repl)); err != nil {
 		return allocator.TransferErr, err
 	}
 	return allocator.TransferOK, nil
@@ -2192,12 +2193,53 @@ func RangeUsageInfoForRepl(repl *Replica) allocator.RangeUsageInfo {
 	loadStats := repl.LoadStats()
 	localityInfo := repl.loadStats.RequestLocalityInfo()
 	return allocator.RangeUsageInfo{
-		LogicalBytes:     repl.GetMVCCStats().Total(),
-		QueriesPerSecond: loadStats.QueriesPerSecond,
-		WritesPerSecond:  loadStats.WriteKeysPerSecond,
+		LogicalBytes:          repl.GetMVCCStats().Total(),
+		QueriesPerSecond:      loadStats.QueriesPerSecond,
+		WritesPerSecond:       loadStats.WriteKeysPerSecond,
+		ReqCPUNanosPerSecond:  loadStats.RequestCPUNanosPerSecond,
+		RaftCPUNanosPerSecond: loadStats.RaftCPUNanosPerSecond,
 		RequestLocality: &allocator.RangeRequestLocalityInfo{
 			Counts:   localityInfo.LocalityCounts,
 			Duration: localityInfo.Duration,
 		},
 	}
+}
+
+// XXX:
+func (rq *replicateQueue) ScaledRangeUsageInfo(repl *Replica) allocator.RangeUsageInfo {
+	return ScaleRangeUsageInfo(RangeUsageInfoForRepl(repl), rq.store.cfg.StoreLoadStatsGetter.Stats())
+}
+
+// make range usage info scaled
+
+/// XXX: bad to have here
+func ScaleRangeUsageInfo(
+	usage allocator.RangeUsageInfo, storeStats load.StoreLoadStats,
+) allocator.RangeUsageInfo {
+	// When estimating the impact we use the formula:
+	//   localStore = local store's sum of attributed replica cpu time
+	//   allStores  = sum of localStore's in the same process i.e. multi-store
+	//   process    = total process cpu time
+	//
+	//   scaledUsage = (usage / localStore) * (localStore / allStores) * process
+	//               = (process / allStores) * usage
+	//
+	// example:
+	//   stores=1 usage=10 allStores=100 process=300
+	//   scaledUsage = 300/100 * 10
+	//               = 1/10 * 300
+	//               = 30
+	//
+	//   stores=2 usage=10 allStores=100 process=300
+	//   scaledUsage = 300/100 * 10
+	//               = 1/10 * 300
+	//               = 30
+	// As shown, the scaledUsage is independent of the local store's CPU. It
+	// depends only on the aggregate of all stores on the same process.
+	scale := storeStats.RuntimeCPUNanosPerSecond / storeStats.ReplicaCPUNanosPerSecond
+
+	usage.ReqCPUNanosPerSecond *= scale
+	usage.RaftCPUNanosPerSecond *= scale
+	return usage
+
 }

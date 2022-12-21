@@ -38,6 +38,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/kvserverbase"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/liveness/livenesspb"
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/load"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts/ptprovider"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/protectedts/ptreconcile"
@@ -673,6 +674,10 @@ func NewServer(cfg Config, stopper *stop.Stopper) (*Server, error) {
 			))
 		},
 	)
+
+	storeLoad := load.NewStoreLoad()
+	storeCPURateTracker := load.NewStoreLoadTracker(storeLoad)
+
 	storeCfg := kvserver.StoreConfig{
 		DefaultSpanConfig:        cfg.DefaultZoneConfig.AsSpanConfig(),
 		Settings:                 st,
@@ -704,6 +709,8 @@ func NewServer(cfg Config, stopper *stop.Stopper) (*Server, error) {
 		SnapshotApplyLimit:       cfg.SnapshotApplyLimit,
 		SnapshotSendLimit:        cfg.SnapshotSendLimit,
 		RangeLogWriter:           rangeLogWriter,
+		StoreLoadStatsGetter:     storeLoad,
+		StoreCPURateListener:     storeCPURateTracker,
 	}
 
 	if storeTestingKnobs := cfg.TestingKnobs.Store; storeTestingKnobs != nil {
@@ -755,6 +762,15 @@ func NewServer(cfg Config, stopper *stop.Stopper) (*Server, error) {
 	kvserver.RegisterPerReplicaServer(grpcServer.Server, node.perReplicaServer)
 	kvserver.RegisterPerStoreServer(grpcServer.Server, node.perReplicaServer)
 	ctpb.RegisterSideTransportServer(grpcServer.Server, ctReceiver)
+
+	{ // wire up admission control's scheduler latency listener
+		rtcbID := load.RegisterCallback(
+			storeLoad.RuntimeCPURate,
+		)
+		stopper.AddCloser(stop.CloserFn(func() {
+			load.UnregisterCallback(rtcbID)
+		}))
+	}
 
 	{ // wire up admission control's scheduler latency listener
 		slcbID := schedulerlatency.RegisterCallback(
@@ -1513,6 +1529,13 @@ func (s *Server) PreStart(ctx context.Context) error {
 	// Start measuring the Go scheduler latency.
 	if err := schedulerlatency.StartSampler(
 		workersCtx, s.st, s.stopper, s.registry, base.DefaultMetricsSampleInterval,
+	); err != nil {
+		return err
+	}
+
+	// Start measuring the cpu
+	if err := load.StartSampler(
+		workersCtx, s.stopper,
 	); err != nil {
 		return err
 	}

@@ -4,17 +4,29 @@ load("@io_bazel_rules_go//go:def.bzl", "go_library")
 go_library(
     name = "load",
     srcs = [
+        "callback.go",
+        "notes.go",
         "record_replica_load.go",
         "replica_load.go",
+        "runtime_listener.go",
+        "runtime_sampler.go",
+        "runtime_tracker.go",
+        "store_listener.go",
+        "store_load.go",
+        "store_load_tracker.go",
     ],
     importpath = "github.com/cockroachdb/cockroach/pkg/kv/kvserver/load",
     visibility = ["//visibility:public"],
     deps = [
         "//pkg/kv/kvserver/replicastats",
         "//pkg/roachpb",
+        "//pkg/server/status",
         "//pkg/util/hlc",
+        "//pkg/util/log",
+        "//pkg/util/stop",
         "//pkg/util/syncutil",
         "//pkg/util/timeutil",
+        "@com_github_vividcortex_ewma//:ewma",
     ],
 )
 

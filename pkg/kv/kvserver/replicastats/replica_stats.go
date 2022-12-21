@@ -19,6 +19,13 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/settings"
 )
 
+// var ReplStatsDuration = settings.RegisterDurationSetting(
+// 	settings.SystemOnly,
+// 	"kv.allocator.replica_stats_duration",
+// 	"how far back to look when calculating replica stats",
+// 	10*time.Minute,
+// ).WithPublic()
+
 const (
 	replStatsRotateInterval = 5 * time.Minute
 	decayFactor             = 0.8
