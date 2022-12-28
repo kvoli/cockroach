@@ -1120,6 +1120,110 @@ func TestAllocatorMultipleStoresPerNodeLopsided(t *testing.T) {
 	}
 }
 
+func TestAllocatorMultipleStoresPerNodeRangeCountRebalance(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+
+	stores := []*roachpb.StoreDescriptor{
+		{
+			StoreID:  1,
+			Node:     roachpb.NodeDescriptor{NodeID: 1},
+			Capacity: roachpb.StoreCapacity{RangeCount: 27, Capacity: 100, Available: 100},
+		},
+		{
+			StoreID:  2,
+			Node:     roachpb.NodeDescriptor{NodeID: 1},
+			Capacity: roachpb.StoreCapacity{RangeCount: 28, Capacity: 100, Available: 100},
+		},
+		{
+			StoreID:  3,
+			Node:     roachpb.NodeDescriptor{NodeID: 2},
+			Capacity: roachpb.StoreCapacity{RangeCount: 28, Capacity: 100, Available: 100},
+		},
+		{
+			StoreID:  4,
+			Node:     roachpb.NodeDescriptor{NodeID: 2},
+			Capacity: roachpb.StoreCapacity{RangeCount: 27, Capacity: 100, Available: 100},
+		},
+		{
+			StoreID:  5,
+			Node:     roachpb.NodeDescriptor{NodeID: 3},
+			Capacity: roachpb.StoreCapacity{RangeCount: 26, Capacity: 100, Available: 100},
+		},
+		{
+			StoreID:  6,
+			Node:     roachpb.NodeDescriptor{NodeID: 3},
+			Capacity: roachpb.StoreCapacity{RangeCount: 23, Capacity: 100, Available: 100},
+		},
+		{
+			StoreID:  7,
+			Node:     roachpb.NodeDescriptor{NodeID: 4},
+			Capacity: roachpb.StoreCapacity{RangeCount: 26, Capacity: 100, Available: 100},
+		},
+		{
+			StoreID:  8,
+			Node:     roachpb.NodeDescriptor{NodeID: 4},
+			Capacity: roachpb.StoreCapacity{RangeCount: 25, Capacity: 100, Available: 100},
+		},
+	}
+
+	ctx := context.Background()
+	stopper, g, sp, a, _ := CreateTestAllocator(ctx, 8, false /* deterministic */)
+	defer stopper.Stop(ctx)
+
+	gossiputil.NewStoreGossiper(g).GossipStores(stores, t)
+
+	somePossibleConfig := false
+
+	var rangeUsageInfo allocator.RangeUsageInfo
+	n := len(stores)
+	for i := 0; i < n-2; i++ {
+		store1 := stores[i]
+		for j := i + 1; j < n-1; j++ {
+			store2 := stores[j]
+			for k := j + 1; k < n; k++ {
+				store3 := stores[k]
+				if store1.Node.NodeID == store2.Node.NodeID ||
+					store1.Node.NodeID == store3.Node.NodeID ||
+					store2.Node.NodeID == store3.Node.NodeID {
+					continue
+				}
+
+				if store1.StoreID != 2 {
+					continue
+				}
+
+				target, remove, reason, ok := a.RebalanceVoter(
+					ctx,
+					sp,
+					roachpb.TestingDefaultSpanConfig(),
+					nil,
+					[]roachpb.ReplicaDescriptor{
+						{NodeID: store1.Node.NodeID, StoreID: store1.StoreID},
+						{NodeID: store2.Node.NodeID, StoreID: store2.StoreID},
+						{NodeID: store3.Node.NodeID, StoreID: store3.StoreID}},
+					nil,
+					rangeUsageInfo,
+					storepool.StoreFilterThrottled,
+					a.ScorerOptions(ctx),
+				)
+
+				if !ok {
+					continue
+				}
+
+				somePossibleConfig = true
+
+				log.Infof(ctx, "stores=(%s=%d,%s=%d,%s=%d) target=%s remove=%s reason=%s ",
+					store1.StoreID, store1.Capacity.RangeCount, store2.StoreID,
+					store2.Capacity.RangeCount, store3.StoreID, store3.Capacity.RangeCount,
+					target, remove, reason)
+			}
+		}
+	}
+	require.True(t, somePossibleConfig)
+}
+
 // TestAllocatorRebalance verifies that rebalance targets are chosen
 // randomly from amongst stores under the MaxFractionUsedThreshold.
 func TestAllocatorRebalanceBasedOnRangeCount(t *testing.T) {

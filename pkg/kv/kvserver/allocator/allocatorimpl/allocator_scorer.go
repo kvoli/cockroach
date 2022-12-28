@@ -311,8 +311,10 @@ func (o RangeCountScorerOptions) shouldRebalanceBasedOnThresholds(
 	}
 
 	overfullThreshold := int32(math.Ceil(overfullRangeThreshold(&o, sl.CandidateRanges.Mean)))
+
 	// 1. We rebalance if `store` is too far above the mean (i.e. stores
 	// that are overfull).
+	// XXX: check (1)
 	if store.Capacity.RangeCount > overfullThreshold {
 		log.KvDistribution.VEventf(ctx, 2,
 			"s%d: should-rebalance(ranges-overfull): rangeCount=%d, mean=%.2f, overfull-threshold=%d",
@@ -325,6 +327,7 @@ func (o RangeCountScorerOptions) shouldRebalanceBasedOnThresholds(
 	if float64(store.Capacity.RangeCount) > sl.CandidateRanges.Mean {
 		underfullThreshold := int32(math.Floor(underfullRangeThreshold(&o, sl.CandidateRanges.Mean)))
 		for _, desc := range sl.Stores {
+			// XXX: check (2)
 			if desc.Capacity.RangeCount < underfullThreshold {
 				log.KvDistribution.VEventf(ctx, 2,
 					"s%d: should-rebalance(better-fit-ranges=s%d): rangeCount=%d, otherRangeCount=%d, "+
