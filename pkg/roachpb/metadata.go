@@ -588,8 +588,9 @@ func (sc StoreCapacity) FractionUsed() float64 {
 func (sc StoreCapacity) Load() load.Load {
 	dims := load.Vector{}
 	dims[load.Queries] = sc.QueriesPerSecond
+	dims[load.NodeCPU] = sc.NodeCPUPerSecond
+	dims[load.StoreCPU] = sc.StoreCPUPerSecond
 	return dims
-
 }
 
 // AddressForLocality returns the network address that nodes in the specified

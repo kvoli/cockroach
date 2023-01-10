@@ -19,10 +19,13 @@ import (
 // RangeUsageInfo contains usage information (sizes and traffic) needed by the
 // allocator to make rebalancing decisions for a given range.
 type RangeUsageInfo struct {
-	LogicalBytes     int64
-	QueriesPerSecond float64
-	WritesPerSecond  float64
-	RequestLocality  *RangeRequestLocalityInfo
+	LogicalBytes          int64
+	QueriesPerSecond      float64
+	WritesPerSecond       float64
+	ReqCPUNanosPerSecond  float64
+	RaftCPUNanosPerSecond float64
+	CPUStoreNodeScale     float64
+	RequestLocality       *RangeRequestLocalityInfo
 }
 
 // RangeRequestLocalityInfo is the same as PerLocalityCounts and is used for
@@ -34,8 +37,19 @@ type RangeRequestLocalityInfo struct {
 }
 
 // Load returns a load dimension representation of the range usage.
+func (r RangeUsageInfo) TransferImpact() load.Load {
+	dims := load.Vector{}
+	dims[load.Queries] = r.QueriesPerSecond
+	dims[load.StoreCPU] = r.ReqCPUNanosPerSecond
+	dims[load.NodeCPU] = dims[load.StoreCPU] * r.CPUStoreNodeScale
+	return dims
+}
+
+// Load returns a load dimension representation of the range usage.
 func (r RangeUsageInfo) Load() load.Load {
 	dims := load.Vector{}
 	dims[load.Queries] = r.QueriesPerSecond
+	dims[load.StoreCPU] = r.RaftCPUNanosPerSecond + r.ReqCPUNanosPerSecond
+	dims[load.NodeCPU] = dims[load.StoreCPU] * r.CPUStoreNodeScale
 	return dims
 }

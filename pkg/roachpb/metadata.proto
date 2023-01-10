@@ -333,6 +333,13 @@ message StoreCapacity {
   optional Percentiles bytes_per_replica = 6 [(gogoproto.nullable) = false];
   optional Percentiles writes_per_replica = 7 [(gogoproto.nullable) = false];
   reserved 11;
+  // store_cpu_per_second tracks the average store cpu use per second. This is
+  // the sum of all the replica's cpu time on this store, which is tracked in
+  // replica stats.
+  optional double store_cpu_per_second = 14 [(gogoproto.nullable) = false, (gogoproto.customname) = "StoreCPUPerSecond"];
+  // node_cpu_per_second tracks the average node cpu use per second. This is the
+  // process reported cpu usage on the host.
+  optional double node_cpu_per_second = 15 [(gogoproto.nullable) = false, (gogoproto.customname) = "NodeCPUPerSecond"];
 }
 
 // StoreProperties contains configuration and OS-level details for a storage device.
