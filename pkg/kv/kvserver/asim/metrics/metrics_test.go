@@ -159,15 +159,14 @@ func Example_storeMetricsWorkload() {
 	ctx := context.Background()
 	start := state.TestingStartTime()
 	settings := config.DefaultSimulationSettings()
-	end := start.Add(90 * time.Second)
+	duration := 90 * time.Second
 	interval := 10 * time.Second
 	rwg := make([]workload.Generator, 1)
 	rwg[0] = workload.TestCreateWorkloadGenerator(settings.Seed, start, 10, 10000)
 	m := metrics.NewTracker(metrics.NewStoreMetricsTracker(os.Stdout))
-	changer := state.NewReplicaChanger()
 	s := state.LoadConfig(state.ComplexConfig)
 
-	sim := asim.NewSimulator(start, end, interval, interval, rwg, s, changer, settings, m)
+	sim := asim.NewSimulator(duration, interval, interval, rwg, s, settings, m)
 	sim.RunSim(ctx)
 	// WIP: non deterministic
 	// Output:
