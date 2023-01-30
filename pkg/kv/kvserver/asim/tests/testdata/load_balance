@@ -1,0 +1,35 @@
+gen_state stores=7 ranges=7 placement_skew=true
+----
+
+gen_load rate=7000 rw_ratio=0.95 access_skew=false min_block=128 max_block=256
+----
+
+assertion stat=qps ticks=5 threshold=1.15
+----
+assertions=[balance(stat=qps threshold=1.15 ticks=5)]
+
+eval minutes=10 samples=1 seed=100
+----
+OK
+
+plot stat=qps sample=1
+----
+ 4002 ┤╭──────╮
+ 3735 ┤│      │
+ 3469 ┤│      ╰╮
+ 3202 ┤│       │
+ 2935 ┤│       │
+ 2668 ┤│       │
+ 2401 ┤│       │
+ 2135 ┤│   ╭──╮│
+ 1868 ┤│╭──╯  ││
+ 1601 ┤││     ╰╮
+ 1334 ┤││      │
+ 1067 ┤╭│──────╭──────────────────────────────────────────────────────────────────────
+  800 ┤││      │
+  534 ┤││      │
+  267 ┤││      │
+    0 ┼────────╯
+                                             qps
+
+# vim:ft=sh

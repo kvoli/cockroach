@@ -12,6 +12,7 @@ package state
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -67,6 +68,7 @@ func (s *SplitDecider) newDecider() *split.Decider {
 		PopularKeyCount: metric.NewCounter(metric.Metadata{}),
 		NoSplitKeyCount: metric.NewCounter(metric.Metadata{}),
 	})
+	fmt.Printf("Split QPS: %.2f\n", s.qpsThreshold())
 	return decider
 }
 

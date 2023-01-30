@@ -10,7 +10,10 @@
 
 package state
 
-import "github.com/cockroachdb/cockroach/pkg/kv/kvserver/asim/config"
+import (
+	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/asim/config"
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
+)
 
 // SingleRegionConfig is a simple cluster config with a single region and 3
 // zones, all have the same number of nodes.
@@ -108,9 +111,19 @@ type ClusterInfo struct {
 	Regions        []Region
 }
 
+type RangeInfo struct {
+	Config roachpb.SpanConfig
+	Replicas []int
+	Leaseholder int
+}
+
+type RangesInfo struct {
+	Ranges []RangeInfo
+}
+
 // LoadConfig loads a predefined configuration which contains cluster
 // information such as regions, zones, etc.
-func LoadConfig(c ClusterInfo) State {
+func LoadConfig(c ClusterInfo, r RangesInfo) State {
 	s := newState(config.DefaultSimulationSettings())
 	// A new state has a single range - add the replica load for that range.
 	s.clusterinfo = c

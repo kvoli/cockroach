@@ -1,0 +1,84 @@
+# Explore how load based and sized based splitting occur in isolation. In this
+# example, there is only one store so no rebalancing activity should occur. 
+gen_state stores=1 ranges=1 repl_factor=1
+----
+
+# Create a load generator, where there is higher ops/s than the qps split
+# threshold set above. Also set to use only reads, to avoid size based splits
+# (we could also disable this via setting the range max size).
+gen_load rate=20000 rw_ratio=1
+----
+
+# Assert that the number of replicas should not change at all during the last 6
+# ticks of the simulation.
+assertion stat=replicas type=steady ticks=6 threshold=0.00
+----
+assertions=[steady(stat=replicas threshold=0.00 ticks=6)]
+
+eval duration=5m samples=2 seed=42
+----
+OK
+
+# Examine the number of replicas. Here there were 10 load based splits. In the
+# perfect run we would expect there to be only 8 splits (20k/2.5k=8).
+plot stat=replicas sample=2
+----
+----
+
+ 11.00 ┤             ╭─────────────────────────────────────────────────────────────────
+ 10.33 ┤             │
+  9.67 ┤             │
+  9.00 ┤             │
+  8.33 ┤             │
+  7.67 ┤             │
+  7.00 ┤          ╭──╯
+  6.33 ┤          │
+  5.67 ┤          │
+  5.00 ┤          │
+  4.33 ┤          │
+  3.67 ┤      ╭───╯
+  3.00 ┤      │
+  2.33 ┤      │
+  1.67 ┤   ╭──╯
+  1.00 ┼───╯
+                                            replicas
+----
+----
+
+# Update the load generator to use a zipfian distribution instead of a uniform.
+# Now the load based splitter must find a split key from a skewed distribution
+# repeatedly - if the load split algorithm is good - we should expect the same
+# number of splits as the uniform workload.
+gen_load rate=20000 rw_ratio=1 access_skew=true
+----
+
+eval duration=5m samples=2 seed=42
+----
+OK
+
+plot stat=replicas sample=4
+----
+----
+
+ 11.00 ┤                                                             ╭─────────────────
+ 10.33 ┤                                                             │
+  9.67 ┤                                       ╭─────────────────────╯
+  9.00 ┤                            ╭──────────╯
+  8.33 ┤                            │
+  7.67 ┤                       ╭────╯
+  7.00 ┤                    ╭──╯
+  6.33 ┤                    │
+  5.67 ┤                ╭───╯
+  5.00 ┤             ╭──╯
+  4.33 ┤             │
+  3.67 ┤          ╭──╯
+  3.00 ┤      ╭───╯
+  2.33 ┤      │
+  1.67 ┤   ╭──╯
+  1.00 ┼───╯
+                                            replicas
+----
+----
+
+
+# vim:ft=sh

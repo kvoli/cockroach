@@ -191,7 +191,6 @@ func Example_plotMetrics() {
 				state.TestingSetRangeQPS(s, r.RangeID(), tc.fixedQPSPerRange)
 			}
 		}
-		// state.AddEmptyRanges(s, 45)
 
 		var keyGen workload.KeyGenerator
 		if tc.workloadSkew {

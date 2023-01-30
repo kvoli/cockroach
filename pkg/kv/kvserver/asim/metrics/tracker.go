@@ -47,19 +47,25 @@ type StoreMetricsListener interface {
 // StoreMetrics information when ticked.
 type Tracker struct {
 	storeListeners []StoreMetricsListener
+	history        [][]StoreMetrics
+	lastTick       time.Time
+	interval       time.Duration
 }
 
 // NewTracker returns a new MetricsTracker.
-func NewTracker(listeners ...StoreMetricsListener) *Tracker {
+func NewTracker(interval time.Duration, listeners ...StoreMetricsListener) *Tracker {
 	return &Tracker{
 		storeListeners: listeners,
+		history:        [][]StoreMetrics{},
+		interval:       interval,
 	}
 }
 
 // Tick updates all listeners attached to the metrics tracker with the state at
 // the tick given.
 func (mt *Tracker) Tick(ctx context.Context, tick time.Time, s state.State) {
-	if len(mt.storeListeners) == 0 {
+	if mt.lastTick.Add(mt.interval).After(tick) {
+		// Nothing to do yet.
 		return
 	}
 	sms := []StoreMetrics{}
@@ -105,7 +111,12 @@ func (mt *Tracker) Tick(ctx context.Context, tick time.Time, s state.State) {
 		return sms[i].StoreID < sms[j].StoreID
 	})
 
+	mt.history = append(mt.history, sms)
 	for _, listener := range mt.storeListeners {
 		listener.Listen(ctx, sms)
 	}
+}
+
+func (mt *Tracker) History() [][]StoreMetrics {
+	return mt.history
 }

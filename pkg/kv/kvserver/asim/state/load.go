@@ -70,11 +70,11 @@ func (rl *ReplicaLoadCounter) ApplyLoad(le workload.LoadEvent) {
 	rl.WriteKeys += le.Writes
 
 	rl.loadStats.RecordBatchRequests(LoadEventQPS(le), 0)
-	rl.loadStats.RecordRequests(LoadEventQPS(le))
-	rl.loadStats.RecordReadKeys(float64(le.Reads))
-	rl.loadStats.RecordReadBytes(float64(le.ReadSize))
-	rl.loadStats.RecordWriteKeys(float64(le.Writes))
-	rl.loadStats.RecordWriteBytes(float64(le.WriteSize))
+	// rl.loadStats.RecordRequests(LoadEventQPS(le))
+	// rl.loadStats.RecordReadKeys(float64(le.Reads))
+	// rl.loadStats.RecordReadBytes(float64(le.ReadSize))
+	// rl.loadStats.RecordWriteKeys(float64(le.Writes))
+	// rl.loadStats.RecordWriteBytes(float64(le.WriteSize))
 }
 
 // Load translates the recorded key accesses and size into range usage

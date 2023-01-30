@@ -6,6 +6,7 @@ go_library(
     srcs = [
         "asim.go",
         "pacer.go",
+        "runner.go",
     ],
     importpath = "github.com/cockroachdb/cockroach/pkg/kv/kvserver/asim",
     visibility = ["//visibility:public"],
