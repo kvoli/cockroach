@@ -732,9 +732,9 @@ type candidate struct {
 
 func (c candidate) String() string {
 	str := fmt.Sprintf("s%d, valid:%t, fulldisk:%t, necessary:%t, diversity:%.2f, ioOverloaded: %t, ioOverload: %.2f, converges:%d, "+
-		"balance:%d, hasNonVoter:%t, rangeCount:%d, queriesPerSecond:%.2f",
+		"balance:%d, hasNonVoter:%t, rangeCount:%d, queriesPerSecond:%.2f, cpuPerSecond: %s",
 		c.store.StoreID, c.valid, c.fullDisk, c.necessary, c.diversityScore, c.ioOverloaded, c.ioOverloadScore, c.convergesScore,
-		c.balanceScore, c.hasNonVoter, c.rangeCount, c.store.Capacity.QueriesPerSecond)
+		c.balanceScore, c.hasNonVoter, c.rangeCount, c.store.Capacity.QueriesPerSecond, load.CPU.Format(c.store.Capacity.CPUPerSecond))
 	if c.details != "" {
 		return fmt.Sprintf("%s, details:(%s)", str, c.details)
 	}
