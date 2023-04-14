@@ -1,0 +1,31 @@
+load("//build/bazelutil/unused_checker:unused.bzl", "get_x_data")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+
+go_library(
+    name = "check-sst_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/cockroachdb/cockroach/pkg/cmd/check-sst",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//pkg/keys",
+        "//pkg/kv/kvpb",
+        "//pkg/roachpb",
+        "//pkg/storage",
+        "//pkg/ts",
+        "//pkg/util/encoding",
+        "//pkg/util/protoutil",
+        "//pkg/util/timeutil",
+        "@com_github_cockroachdb_errors//:errors",
+        "@com_github_cockroachdb_pebble//:pebble",
+        "@com_github_cockroachdb_pebble//sstable",
+        "@com_github_cockroachdb_pebble//vfs",
+    ],
+)
+
+go_binary(
+    name = "check-sst",
+    embed = [":check-sst_lib"],
+    visibility = ["//visibility:public"],
+)
+
+get_x_data(name = "get_x_data")
