@@ -257,6 +257,7 @@ func DefaultProviderOpts() *ProviderOpts {
 		TerminateOnMigration: false,
 		useSharedUser:        true,
 		preemptible:          false,
+		confidentialCompute:  false,
 	}
 }
 
@@ -287,6 +288,11 @@ type ProviderOpts struct {
 	useSharedUser bool
 	// use preemptible instances
 	preemptible bool
+
+	// confidentialCompute, if true, creates the VMs with the
+	// "--confidential-compute" flag. This is only available on gcloud. See
+	// https://cloud.google.com/confidential-computing for more information.
+	confidentialCompute bool
 }
 
 // Provider is the GCE implementation of the vm.Provider interface.
@@ -636,6 +642,8 @@ func (o *ProviderOpts) ConfigureCreateFlags(flags *pflag.FlagSet) {
 	flags.BoolVar(&o.preemptible, ProviderName+"-preemptible", false, "use preemptible GCE instances")
 	flags.BoolVar(&o.TerminateOnMigration, ProviderName+"-terminateOnMigration", false,
 		"use 'TERMINATE' maintenance policy (for GCE live migrations)")
+	flags.BoolVar(&o.confidentialCompute, ProviderName+"-confidential-compute",
+		false, "Create the VMs with confidential computing turned on")
 }
 
 // ConfigureClusterFlags implements vm.ProviderFlags.
@@ -742,6 +750,10 @@ func (p *Provider) Create(
 	}
 	if p.ServiceAccount != "" {
 		args = append(args, "--service-account", p.ServiceAccount)
+	}
+
+	if providerOpts.confidentialCompute {
+		args = append(args, "--confidential-compute")
 	}
 
 	if providerOpts.preemptible {
