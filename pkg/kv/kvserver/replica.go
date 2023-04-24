@@ -2356,3 +2356,43 @@ func (r *Replica) ReadProtectedTimestampsForTesting(ctx context.Context) (err er
 	ts, err = r.readProtectedTimestampsRLocked(ctx)
 	return err
 }
+
+func (r *Replica) loadSplitKey(ctx context.Context, now time.Time) (roachpb.Key, error) {
+	splitKey := r.loadBasedSplitter.MaybeSplitKey(ctx, now)
+	if splitKey == nil {
+		return nil, nil
+	}
+
+	splitByLoadRKey, err := keys.Addr(splitKey)
+	if err != nil {
+		return nil, errors.Errorf(
+			"load: cannot split range at range-local key %s", splitKey)
+	}
+
+	// Check the suggested split key against the start key of the range. We don't
+	// expect it to be less than the start key. If it is equal to the start key,
+	// then it is likely there is only one key in the range with column families
+	// and we can't split.
+	switch splitByLoadRKey.Compare(r.Desc().GetStartKey()) {
+	case -1:
+		return nil, errors.Errorf(
+			"cannot split range out of bounds %s", splitByLoadRKey)
+	case 0:
+		log.KvDistribution.VEventf(ctx, 2,
+			"key returned by lb split is equal to start key %s",
+			splitByLoadRKey)
+		return nil, errors.Errorf(
+			"cannot split range at start key %s", splitByLoadRKey)
+	}
+
+	// Check the suggested split key against the end key of the range. We don't
+	// expect it to be equal to or greater than the end key, as that is outside
+	// of the range.
+	switch splitByLoadRKey.Compare(r.Desc().EndKey) {
+	case 0, 1:
+		return nil, errors.Errorf(
+			"cannot split range out of bounds %s", splitByLoadRKey)
+	}
+
+	return splitKey, nil
+}
