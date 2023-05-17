@@ -119,6 +119,14 @@ func (ic internedConstraint) less(b internedConstraint) bool {
 	return false
 }
 
+func (ic internedConstraint) unintern(interner *stringInterner) roachpb.Constraint {
+	return roachpb.Constraint{
+		Type:  ic.typ,
+		Key:   interner.toString(ic.key),
+		Value: interner.toString(ic.value),
+	}
+}
+
 // constraints are in increasing order using internedConstraint.less.
 type constraintsConj []internedConstraint
 
@@ -230,6 +238,19 @@ func (cc constraintsConj) relationship(b constraintsConj) conjunctionRelationshi
 type internedConstraintsConjunction struct {
 	numReplicas int32
 	constraints constraintsConj
+}
+
+func (icc internedConstraintsConjunction) unintern(
+	interner *stringInterner,
+) roachpb.ConstraintsConjunction {
+	constraints := make([]roachpb.Constraint, len(icc.constraints))
+	for i := range icc.constraints {
+		constraints[i] = icc.constraints[i].unintern(interner)
+	}
+	return roachpb.ConstraintsConjunction{
+		NumReplicas: icc.numReplicas,
+		Constraints: constraints,
+	}
 }
 
 type internedLeasePreference struct {
@@ -613,6 +634,36 @@ type analyzedConstraints struct {
 	satisfiedNoConstraintReplica [numReplicaKinds][]roachpb.StoreID
 }
 
+func (ac *analyzedConstraints) uninternString(interner *stringInterner) string {
+	if ac.isEmpty() {
+		return ""
+	}
+
+	var buf strings.Builder
+
+	fmt.Fprintf(&buf, "\tconstraints:\n")
+	for _, c := range ac.constraints {
+		constraint := c.unintern(interner)
+		fmt.Fprintf(&buf, "\t\t%s\n", constraint)
+	}
+
+	if len(ac.satisfiedByReplica[voterIndex]) > 0 ||
+		len(ac.satisfiedByReplica[nonVoterIndex]) > 0 {
+		fmt.Fprintf(&buf, "\tsatisfying:\n")
+		fmt.Fprintf(&buf, "\t\tvoters=%v\n\t\tnon-voters=%v\n",
+			ac.satisfiedByReplica[voterIndex], ac.satisfiedByReplica[nonVoterIndex])
+	}
+
+	if len(ac.satisfiedNoConstraintReplica[voterIndex]) > 0 ||
+		len(ac.satisfiedNoConstraintReplica[nonVoterIndex]) > 0 {
+		fmt.Fprintf(&buf, "\tnot-satisfying:\n")
+		fmt.Fprintf(&buf, "\t\tvoters=%v\n\t\tnon-voters=%v\n",
+			ac.satisfiedNoConstraintReplica[voterIndex], ac.
+				satisfiedNoConstraintReplica[nonVoterIndex])
+	}
+	return buf.String()
+}
+
 func (ac *analyzedConstraints) clear() {
 	ac.constraints = ac.constraints[:0]
 	for i := range ac.satisfiedByReplica {
@@ -656,6 +707,42 @@ type rangeAnalyzedConstraints struct {
 	replicasDiversityScore float64
 
 	buf analyzeConstraintsBuf
+}
+
+func (rac *rangeAnalyzedConstraints) uninternString(
+	interner *stringInterner, localityInterner *localityTierInterner,
+) string {
+	var buf strings.Builder
+	fmt.Fprintf(&buf, "voters=%d/%d ", len(rac.replicas[voterIndex]), rac.numNeededReplicas[voterIndex])
+	fmt.Fprintf(&buf, "non-voters=%d/%d ", len(rac.replicas[nonVoterIndex]), rac.numNeededReplicas[nonVoterIndex])
+	fmt.Fprintf(&buf, "diversity=%.2f ", rac.replicasDiversityScore)
+	fmt.Fprintf(&buf, "voter-diversity=%.2f\n", rac.votersDiversityScore)
+
+	if !rac.constraints.isEmpty() {
+		fmt.Fprintf(&buf, "analyzed-constraints:\n%s",
+			rac.constraints.uninternString(interner))
+	}
+	if !rac.voterConstraints.isEmpty() {
+		fmt.Fprintf(&buf, "analyzed-voter-constraints:\n%s",
+			rac.voterConstraints.uninternString(interner))
+	}
+
+	if len(rac.replicas[voterIndex]) > 0 {
+		fmt.Fprintf(&buf, "voters:\n")
+		for _, voter := range rac.replicas[voterIndex] {
+			fmt.Fprintf(&buf, "\ts%d=%s\n",
+				voter.StoreID, localityInterner.unintern(voter.localityTiers))
+		}
+	}
+	if len(rac.replicas[nonVoterIndex]) > 0 {
+		fmt.Fprintf(&buf, "non-voters:\n")
+		for _, nonVoter := range rac.replicas[nonVoterIndex] {
+			fmt.Fprintf(&buf, "\ts%d=%s\n",
+				nonVoter.StoreID, localityInterner.unintern(nonVoter.localityTiers))
+		}
+	}
+
+	return buf.String()
 }
 
 var rangeAnalyzedConstraintsPool = sync.Pool{
@@ -739,8 +826,14 @@ func (rac *rangeAnalyzedConstraints) finishInit(
 		// oversatisfying.
 		for j := range ac.constraints {
 			doneFunc := func() bool {
-				return len(ac.satisfiedByReplica[voterIndex][j])+
-					len(ac.satisfiedByReplica[nonVoterIndex][j]) >= int(ac.constraints[j].numReplicas)
+				actualVoterReplicas, actualNonVoterReplicas := 0, 0
+				if len(ac.satisfiedByReplica[voterIndex]) > j+1 {
+					actualVoterReplicas = len(ac.satisfiedByReplica[voterIndex][j])
+				}
+				if len(ac.satisfiedByReplica[nonVoterIndex]) > j+1 {
+					actualNonVoterReplicas = len(ac.satisfiedByReplica[nonVoterIndex][j])
+				}
+				return actualVoterReplicas+actualNonVoterReplicas >= int(ac.constraints[j].numReplicas)
 			}
 			done := doneFunc()
 			if done {
@@ -836,6 +929,14 @@ func (rac *rangeAnalyzedConstraints) finishInit(
 
 // Disjunction of conjunctions.
 type constraintsDisj []internedConstraintsConjunction
+
+func (cd constraintsDisj) unintern(interner *stringInterner) []roachpb.ConstraintsConjunction {
+	constraintsConjunctions := make([]roachpb.ConstraintsConjunction, len(cd))
+	for i := range cd {
+		constraintsConjunctions[i] = cd[i].unintern(interner)
+	}
+	return constraintsConjunctions
+}
 
 // FNV-1a hash algorithm.
 func (cd constraintsDisj) hash() uint64 {
@@ -1274,6 +1375,7 @@ func (rac *rangeAnalyzedConstraints) candidatesToRemove() ([]roachpb.StoreID, er
 		}
 		if !rac.constraints.isEmpty() {
 			for i, c := range rac.constraints.constraints {
+				fmt.Printf("rac %+v\n", rac.constraints.satisfiedByReplica)
 				if int(c.numReplicas) < len(rac.constraints.satisfiedByReplica[voterIndex][i])+
 					len(rac.constraints.satisfiedByReplica[nonVoterIndex][i]) {
 					// Oversatisfied. Can remove a voter.
@@ -1594,6 +1696,15 @@ func (lti *localityTierInterner) intern(locality roachpb.Locality) localityTiers
 	}
 	lt.str = buf.String()
 	return lt
+}
+
+func (lti *localityTierInterner) unintern(lt localityTiers) roachpb.Locality {
+	var tiers []roachpb.Tier
+	for i := range lt.tiers {
+		tiers = append(tiers,
+			roachpb.Tier{Key: "_", Value: lti.si.toString(lt.tiers[i])})
+	}
+	return roachpb.Locality{Tiers: tiers}
 }
 
 type localityTiers struct {

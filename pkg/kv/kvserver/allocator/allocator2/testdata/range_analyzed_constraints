@@ -1,0 +1,50 @@
+config num-replicas=5 num-voters=3
+constraint num-replicas=3 +region=us-west +zone=us-west-a
+constraint num-replicas=1 +region=us-west +zone=us-west-b
+constraint num-replicas=1 +region=us-west +zone=us-west-c
+voter-constraint num-replicas=3 +region=us-west +zone=us-west-a
+----
+err=intersecting conjunctions in constraints and voter constraints
+ num-replicas=5 num-voters=3
+ constraints:
+   +region=us-west,+zone=us-west-a:3
+   +region=us-west,+zone=us-west-b:1
+   +region=us-west,+zone=us-west-c:1
+ voter-constraints:
+   +region=us-west,+zone=us-west-a:3
+
+replicas
+store=1 kind=voter attrs=region=us-west,zone=us-west-a
+store=2 kind=voter attrs=region=us-west,zone=us-west-a
+store=3 kind=voter attrs=region=us-west,zone=us-west-a
+store=4 kind=non-voter attrs=region=us-west,zone=us-west-b
+store=5 kind=non-voter attrs=region=us-west,zone=us-west-c
+----
+
+analyze
+----
+voters=3/3 non-voters=2/2 diversity=0.35 voter-diversity=0.00
+analyzed-constraints:
+	constraints:
+		+region=us-west,+zone=us-west-a:3
+		+region=us-west,+zone=us-west-b:1
+		+region=us-west,+zone=us-west-c:1
+	not-satisfying:
+		voters=[1 2 3]
+		non-voters=[4 5]
+analyzed-voter-constraints:
+	constraints:
+		+region=us-west,+zone=us-west-a:3
+	not-satisfying:
+		voters=[1 2 3]
+		non-voters=[4 5]
+voters:
+	s1=_=us-west,_=us-west-a
+	s2=_=us-west,_=us-west-a
+	s3=_=us-west,_=us-west-a
+non-voters:
+	s4=_=us-west,_=us-west-b
+	s5=_=us-west,_=us-west-c
+
+eval fn=replaceVoterRebalance store=1
+----
