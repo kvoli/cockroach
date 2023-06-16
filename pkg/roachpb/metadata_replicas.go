@@ -33,6 +33,19 @@ func MakeReplicaSet(replicas []ReplicaDescriptor) ReplicaSet {
 	return ReplicaSet{wrapped: replicas}
 }
 
+// Subtract one sets of replicas from another. This returning the replica
+// descriptors that were present in the original and not the other. 'd' is the
+// original set of descriptors, 'o' is the other.
+func (d ReplicaSet) Subtract(o ReplicaSet) []ReplicaDescriptor {
+	var repls []ReplicaDescriptor
+	for _, repl := range d.Descriptors() {
+		if _, found := o.GetReplicaDescriptorByID(repl.ReplicaID); !found {
+			repls = append(repls, repl)
+		}
+	}
+	return repls
+}
+
 // SafeFormat implements redact.SafeFormatter.
 func (d ReplicaSet) SafeFormat(w redact.SafePrinter, _ rune) {
 	for i, desc := range d.wrapped {

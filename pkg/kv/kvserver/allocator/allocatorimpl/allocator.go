@@ -1547,19 +1547,50 @@ func (a *Allocator) ValidLeaseTargets(
 	replDescs := roachpb.MakeReplicaSet(existing)
 	for i := range existing {
 		if err := roachpb.CheckCanReceiveLease(existing[i], replDescs, false /* wasLastLeaseholder */); err != nil {
+			log.KvDistribution.VEventf(
+				ctx,
+				5,
+				"not considering [n%d, s%d] as a potential candidate for a lease transfer"+
+					"because %v",
+				existing[i].NodeID, existing[i].StoreID, err,
+			)
 			continue
 		}
 		// If we're not allowed to include the current replica, remove it from
 		// consideration here.
 		if existing[i].StoreID == leaseRepl.StoreID() && opts.ExcludeLeaseRepl {
+			log.KvDistribution.VEventf(
+				ctx,
+				5,
+				"not considering [n%d, s%d] as a potential candidate for a lease transfer"+
+					"because transfer options exclude current leaseholder",
+				existing[i].NodeID, existing[i].StoreID,
+			)
 			continue
 		}
 		candidates = append(candidates, existing[i])
 	}
-	candidates, _ = a.StorePool.LiveAndDeadReplicas(
+	liveCandidates, _ := a.StorePool.LiveAndDeadReplicas(
 		candidates, false, /* includeSuspectAndDrainingStores */
 	)
 
+	if log.ExpensiveLogEnabled(ctx, 5) {
+		// Non-live replicas contains dead, as well as draining, suspect and
+		// unknown replicas.
+		nonLiveCandidates := roachpb.MakeReplicaSet(candidates).
+			Subtract(roachpb.MakeReplicaSet(liveCandidates))
+		for i := range nonLiveCandidates {
+			log.KvDistribution.VEventf(
+				ctx,
+				5,
+				"not considering [n%d, s%d] as a potential candidate for a lease transfer"+
+					"because replica is non-live",
+				nonLiveCandidates[i].NodeID, nonLiveCandidates[i].StoreID,
+			)
+		}
+	}
+
+	candidates = liveCandidates
 	if a.knobs == nil || !a.knobs.AllowLeaseTransfersToReplicasNeedingSnapshots {
 		// Only proceed with the lease transfer if we are also the raft leader (we
 		// already know we are the leaseholder at this point), and only consider
@@ -1606,6 +1637,14 @@ func (a *Allocator) ValidLeaseTargets(
 			ctx, status, leaseRepl.GetFirstIndex(), candidates)...)
 	}
 
+	// NB: Below this point, validity is an overloaded term. When a preference
+	// can't be satisfied, we check the next preference, and so on. If no
+	// preferences are satisfied, then preferences are ignored. The valid target
+	// checks above this point are independent of other candidates, whereas below
+	// this point a candidate's validity can depend on the remaining candidates.
+	// If there is at least one candidate remaining now, we are guaranteed to
+	// return a lease transfer target.
+	//
 	// Determine which store(s) is preferred based on user-specified preferences.
 	// If any stores match, only consider those stores as candidates.
 	preferred := a.PreferredLeaseholders(conf, candidates)
@@ -2319,13 +2358,14 @@ func excludeReplicasInNeedOfSnapshots(
 ) []roachpb.ReplicaDescriptor {
 	filled := 0
 	for _, repl := range replicas {
-		if raftutil.ReplicaMayNeedSnapshot(st, firstIndex, repl.ReplicaID) != raftutil.NoSnapshotNeeded {
+		reason := raftutil.ReplicaMayNeedSnapshot(st, firstIndex, repl.ReplicaID)
+		if reason != raftutil.NoSnapshotNeeded {
 			log.KvDistribution.VEventf(
 				ctx,
 				5,
 				"not considering [n%d, s%d] as a potential candidate for a lease transfer"+
-					" because the replica may be waiting for a snapshot",
-				repl.NodeID, repl.StoreID,
+					" because the replica may be waiting for a snapshot. reason=%+v raft-status=%v, first-index=%d",
+				repl.NodeID, repl.StoreID, reason, st, firstIndex,
 			)
 			continue
 		}
