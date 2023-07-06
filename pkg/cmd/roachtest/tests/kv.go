@@ -996,7 +996,7 @@ func registerKVRestartImpact(r registry.Registry) {
 			c.Put(ctx, t.Cockroach(), "./cockroach", c.All())
 			startOpts := option.DefaultStartOpts()
 			startOpts.RoachprodOpts.ExtraArgs = append(startOpts.RoachprodOpts.ExtraArgs,
-				"--vmodule=store_rebalancer=5,allocator=5,allocator_scorer=5,replicate_queue=5")
+				"--vmodule=store_rebalancer=3,allocator=5,allocator_scorer=3,replicate_queue=3,replica_propsal=1")
 			c.Start(ctx, t.L(), startOpts, install.MakeClusterSettings(), c.Range(1, nodes))
 
 			// The duration of the outage.

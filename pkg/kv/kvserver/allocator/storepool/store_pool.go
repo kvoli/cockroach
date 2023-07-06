@@ -78,6 +78,7 @@ type StoreDetail struct {
 	// LastUnavailable is set when it's detected that a store was unavailable,
 	// i.e. failed liveness.
 	LastUnavailable hlc.Timestamp
+	lastStatus      storeStatus
 }
 
 // storeStatus is the current status of a store.
@@ -110,7 +111,41 @@ const (
 	storeStatusDraining
 )
 
+func (ss storeStatus) String() string {
+	switch ss {
+	case storeStatusDead:
+		return "dead"
+	case storeStatusUnknown:
+		return "unknown"
+	case storeStatusThrottled:
+		return "throttled"
+	case storeStatusAvailable:
+		return "available"
+	case storeStatusSuspect:
+		return "suspect"
+	case storeStatusDraining:
+		return "draining"
+	default:
+		return "invalid"
+	}
+}
+
 func (sd *StoreDetail) status(
+	now hlc.Timestamp,
+	deadThreshold time.Duration,
+	nl NodeLivenessFunc,
+	suspectDuration time.Duration,
+) storeStatus {
+	ss := sd.statusExtra(now, deadThreshold, nl, suspectDuration)
+	if sd.lastStatus != ss {
+		log.KvDistribution.Infof(context.Background(),
+			"s%d status change from=%s to=%s", sd.Desc.StoreID, sd.lastStatus, ss)
+	}
+	sd.lastStatus = ss
+	return ss
+}
+
+func (sd *StoreDetail) statusExtra(
 	now hlc.Timestamp,
 	deadThreshold time.Duration,
 	nl NodeLivenessFunc,
@@ -408,7 +443,7 @@ func (sp *StorePool) statusString(nl NodeLivenessFunc) string {
 		fmt.Fprintf(&buf, "%d", id)
 		status := detail.status(now, timeUntilNodeDead, nl, timeAfterNodeSuspect)
 		if status != storeStatusAvailable {
-			fmt.Fprintf(&buf, " (status=%d)", status)
+			fmt.Fprintf(&buf, " (status=%s)", status)
 		}
 		if detail.Desc != nil {
 			fmt.Fprintf(&buf, ": range-count=%d fraction-used=%.2f",
