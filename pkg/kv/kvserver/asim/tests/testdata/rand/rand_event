@@ -1,13 +1,13 @@
 rand_cluster cluster_gen_type=multi_region
 ----
 
-change_static_option ranges=1
+change_static_option ranges=10
 ----
 
 rand_events type=cycle_via_random_survival_goals duration_to_assert_on_event=5m
 ----
 
-eval duration=60m num_iterations=1 verbose=(all)
+eval duration=60m num_iterations=20
 ----
 test settings
 	num_iterations=1 duration=1h0m0s

@@ -693,6 +693,7 @@ type candidate struct {
 	valid           bool
 	fullDisk        bool
 	necessary       bool
+	necessaryVoter  bool
 	diversityScore  float64
 	ioOverloaded    bool
 	ioOverloadScore float64
@@ -1467,6 +1468,16 @@ func (o *LoadScorerOptions) getRebalanceTargetToMinimizeDelta(
 	)
 }
 
+// TODO(kvoli):
+// Create an new rebalanceConstraintsFn, which goes along with the
+// rankedCandidateListForRebalancing.
+//
+// assumptions:
+// 1. num(voters)   = req(voters)
+// 2. num(replicas) = req(replicas)
+// 3. some voter constraint is not satisfied.
+//
+//
 // rankedCandidateListForRebalancing returns a list of `rebalanceOptions`, i.e.
 // groups of candidate stores and the existing replicas that they could legally
 // replace in the range. See comment above `rebalanceOptions()` for more
@@ -1614,6 +1625,16 @@ func rankedCandidateListForRebalancing(
 				fullDisk:       !options.getDiskOptions().maxCapacityCheck(store),
 				diversityScore: diversityScore,
 			}
+      // TODO(kvoli): Could insert a check here, if both are necessary then, it
+      // seems reasonable that some sort of determination could be made here
+      // based on whether the target is a voter or note.
+			// if existing.necessary && cand.necessary {
+			// 	log.Infof(ctx,
+			// 		"s%d->s%d oldNecessary:%t, newNecessary:%t, "+
+			// 			"oldDiversity:%f, newDiversity:%f, locality:%q",
+			// 		existing.store.StoreID, store.StoreID, existing.necessary, cand.necessary,
+			// 		existing.diversityScore, cand.diversityScore, store.Locality())
+			// }
 			if !cand.less(existing) {
 				// If `cand` is not worse than `existing`, add it to the list.
 				comparableCands = append(comparableCands, cand)

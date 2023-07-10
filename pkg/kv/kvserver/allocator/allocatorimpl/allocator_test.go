@@ -8120,6 +8120,247 @@ func TestSimulateFilterUnremovableReplicas(t *testing.T) {
 	}
 }
 
+// Trying to reproduce #98020.
+// localities:
+//
+//	us-east-1,us-east-1,
+//	us-west-1,us-west-1,
+//	us-central-1,us-central-1,us-central-1,
+//	eu-west-1,eu-west-1,eu-west-1
+//
+// zone_config:
+//
+//		num_replicas:6 num_voters:5
+//		constraints
+//	   eu-west-1, us-central-1, us-east-1, us-west-1
+//		voter_constraints
+//	   us-west-1, us-west-1, us-east-1, us-east-1
+//
+// existing replicas
+//
+//	voters=[n1,n2,n4,n5,n8]
+//	non_voters=[n3]
+func TestAllocatorRebalanceConstraintsNonVoter(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	ctx := context.Background()
+
+	regions := []string{
+		"us-east-1", "us-east-1", "us-west-1", "us-west-1", "us-central-1", "us-central-1",
+		"us-central-1", "eu-west-1", "eu-west-1", "eu-west-1",
+	}
+	// Attempt to construct a simpler repro:
+	//
+	// We want rebalance path where necessary(existing) = true and necessary(candidate) = true,
+	// i.e. The existing voter is necessary to satisfy an all-replica constraint,
+	// but so is the candidate non-voter.
+	//
+	// replica_constraints = a:1 b:2
+	// voter_constraints   = a:2
+	// num_replicas        = 4
+	// num_voters          = 3
+	//
+	// We could have the following setup initially, not satisfying a voter constraint:
+	// voters     = a,b,b (num_voters   = 3 OK)
+	// non-voters = a     (num_replicas = 4 OK)
+	//
+	// Here, a voter constraint isn't being satisfied because voters(a)=1, the
+	// all replica constraint is being satisfied replicas(a)=1 replicas(b)=2.
+	//
+	// A correct configuration would be:
+	// voters     = a,a,b (num_voters   = 3 OK)
+	// non-voters = b     (num_replicas = 4 OK)
+	//
+	// The action to get from [a,b,b,a(non-voter)] -> [a,a,b,b(non-voter)] would
+	// be promoting a, demoting b.
+	//
+	//
+	replicas := replicas(1, 2, 3, 4, 5, 8)
+	replicas[2].Type = roachpb.NON_VOTER
+
+	rset := roachpb.MakeReplicaSet(replicas)
+	voters := rset.Voters().AsProto()
+	nonVoters := rset.NonVoters().AsProto()
+	log.Infof(ctx, "replicas: voters=%v non-voters=%v", voters, nonVoters)
+
+	var stores []*roachpb.StoreDescriptor
+	for i := 0; i < 10; i++ {
+		stores = append(stores, &roachpb.StoreDescriptor{
+			StoreID: roachpb.StoreID(i + 1),
+			Node: roachpb.NodeDescriptor{
+				NodeID: roachpb.NodeID(i + 1),
+				Locality: roachpb.Locality{Tiers: []roachpb.Tier{
+					{Key: "region", Value: regions[i]},
+				}},
+			},
+			Capacity: roachpb.StoreCapacity{RangeCount: 30},
+		})
+	}
+
+	constraintRegions := []string{"us-west-1", "us-east-1", "us-central-1", "eu-west-1"}
+	var constraints []roachpb.ConstraintsConjunction
+	var voterConstraints []roachpb.ConstraintsConjunction
+
+	for _, region := range constraintRegions {
+		constraints = append(constraints, roachpb.ConstraintsConjunction{
+			NumReplicas: 1,
+			Constraints: []roachpb.Constraint{
+				{
+					Type:  roachpb.Constraint_REQUIRED,
+					Key:   "region",
+					Value: region,
+				},
+			},
+		})
+	}
+
+	for _, region := range constraintRegions[:2] {
+		voterConstraints = append(voterConstraints, roachpb.ConstraintsConjunction{
+			NumReplicas: 2,
+			Constraints: []roachpb.Constraint{
+				{
+					Type:  roachpb.Constraint_REQUIRED,
+					Key:   "region",
+					Value: region,
+				},
+			},
+		})
+	}
+
+	spanConfig := roachpb.TestingDefaultSpanConfig()
+	spanConfig.Constraints = constraints
+	spanConfig.VoterConstraints = voterConstraints
+	spanConfig.NumReplicas = 6
+	spanConfig.NumVoters = 5
+	log.Infof(ctx, "span_config: %s", spanConfig.String())
+
+	stopper, g, sp, a, _ := CreateTestAllocator(ctx, len(stores) /* numNodes */, true /* deterministic */)
+	defer stopper.Stop(ctx)
+	gossiputil.NewStoreGossiper(g).GossipStores(stores, t)
+
+	add, remove, details, ok := a.RebalanceVoter(
+		ctx,
+		sp,
+		&spanConfig,
+		nil,
+		voters,
+		nonVoters,
+		allocator.RangeUsageInfo{},
+		storepool.StoreFilterThrottled,
+		a.ScorerOptions(ctx),
+	)
+	log.Infof(ctx, "rebalance_voter: add=%v remove=%v details=%v ok=%v", add, remove, details, ok)
+}
+
+func TestAllocatorRebalanceConstraintsNonVoter2(t *testing.T) {
+	defer leaktest.AfterTest(t)()
+	defer log.Scope(t).Close(t)
+	ctx := context.Background()
+
+	regionConjunctionFn := func(regionName string, numReplicas int32) roachpb.ConstraintsConjunction {
+		return roachpb.ConstraintsConjunction{
+			NumReplicas: numReplicas,
+			Constraints: []roachpb.Constraint{
+				{
+					Type:  roachpb.Constraint_REQUIRED,
+					Key:   "region",
+					Value: regionName,
+				},
+			},
+		}
+	}
+
+	regions := []string{"a", "a", "b", "b"}
+	// Attempt to construct a simpler repro:
+	//
+	// We want rebalance path where necessary(existing) = true and necessary(candidate) = true,
+	// i.e. The existing voter is necessary to satisfy an all-replica constraint,
+	// but so is the candidate non-voter.
+	//
+	// replica_constraints = a:1 b:2
+	// voter_constraints   = a:2
+	// num_replicas        = 4
+	// num_voters          = 3
+	//
+	// We could have the following setup initially, not satisfying a voter constraint:
+	// voters     = a,b,b (num_voters   = 3 OK)
+	// non-voters = a     (num_replicas = 4 OK)
+	//
+	// Here, a voter constraint isn't being satisfied because voters(a)=1, the
+	// all replica constraint is being satisfied replicas(a)=1 replicas(b)=2.
+	//
+	// A (the only) correct configuration would be:
+	// voters     = a,a,b (num_voters   = 3 OK)
+	// non-voters = b     (num_replicas = 4 OK)
+	//
+	// The action to get from [a(non-voter),a,b,b] -> [a,a,b,b(non-voter)] would
+	// be promoting a, demoting b.
+	//
+	// This could be done in a single action e.g.
+	//
+	// - Rebalance: A: ADD_VOTER, REMOVE_NON_VOTER
+	//              B: ADD_NON_VOTER, REMOVE_VOTER
+	//
+	// n3(b,voter) or n4(b,voter) need to rebalance onto n1(a,non-voter).
+	//
+	// would a better zcfg get out this?
+	// i.e.
+	// replica_constraints = a:2 b:2(=4)
+	// voter_constraints   = a:2,b:1(=3)
+	// num_replicas        = 4
+	// num_voters          = 3
+	//
+	replicas := replicas(1, 2, 3, 4)
+	// Make replica 0 (region=a) a non-voter
+	replicas[0].Type = roachpb.NON_VOTER
+	rset := roachpb.MakeReplicaSet(replicas)
+	voters := rset.Voters().AsProto()
+	nonVoters := rset.NonVoters().AsProto()
+	log.Infof(ctx, "replicas: voters=%v non-voters=%v", voters, nonVoters)
+
+	var stores []*roachpb.StoreDescriptor
+	for i := 0; i < len(regions); i++ {
+		stores = append(stores, &roachpb.StoreDescriptor{
+			StoreID: roachpb.StoreID(i + 1),
+			Node: roachpb.NodeDescriptor{
+				NodeID: roachpb.NodeID(i + 1),
+				Locality: roachpb.Locality{Tiers: []roachpb.Tier{
+					{Key: "region", Value: regions[i]},
+				}},
+			},
+			Capacity: roachpb.StoreCapacity{RangeCount: 0},
+		})
+	}
+
+	// Setup the cfg.
+	// how to resolve:
+	// - create a rebalancing phase.
+	// -
+	spanConfig := roachpb.TestingDefaultSpanConfig()
+	spanConfig.Constraints = []roachpb.ConstraintsConjunction{regionConjunctionFn("a", 2), regionConjunctionFn("b", 2)}
+	spanConfig.VoterConstraints = []roachpb.ConstraintsConjunction{regionConjunctionFn("a", 2), regionConjunctionFn("b", 1)}
+	spanConfig.NumReplicas = 4
+	spanConfig.NumVoters = 3
+	log.Infof(ctx, "span_config: %s", spanConfig.String())
+
+	stopper, g, sp, a, _ := CreateTestAllocator(ctx, len(stores) /* numNodes */, true /* deterministic */)
+	defer stopper.Stop(ctx)
+	gossiputil.NewStoreGossiper(g).GossipStores(stores, t)
+
+	add, remove, details, ok := a.RebalanceVoter(
+		ctx,
+		sp,
+		&spanConfig,
+		nil,
+		voters,
+		nonVoters,
+		allocator.RangeUsageInfo{},
+		storepool.StoreFilterThrottled,
+		a.ScorerOptions(ctx),
+	)
+	log.Infof(ctx, "rebalance_voter: add=%v remove=%v details=%v ok=%v", add, remove, details, ok)
+}
+
 // TestAllocatorRebalanceDeterminism tests that calls to RebalanceVoter are
 // deterministic.
 func TestAllocatorRebalanceDeterminism(t *testing.T) {
@@ -9146,4 +9387,99 @@ func TestingQPSLoadScorerOptions(
 		RebalanceImpact:              MakeQPSOnlyDim(qpsPerReplica),
 	}
 	return options
+}
+
+func TestAllocatorRebalanceTargetForRoleSwap(t *testing.T) {
+	ctx := context.Background()
+
+	storesFn := func(storeRegions ...string) []*roachpb.StoreDescriptor {
+		var descs []*roachpb.StoreDescriptor
+		for i, storeRegion := range storeRegions {
+			descs = append(descs, &roachpb.StoreDescriptor{
+				StoreID: roachpb.StoreID(i + 1),
+				Node: roachpb.NodeDescriptor{
+					NodeID: roachpb.NodeID(i + 1),
+					Locality: roachpb.Locality{Tiers: []roachpb.Tier{
+						{Key: "region", Value: storeRegion},
+					}},
+				},
+				// Leave the stats as mostly the same to avoid complicating examples.
+				Capacity: roachpb.StoreCapacity{RangeCount: 0, Capacity: 200, Available: 200},
+			})
+
+		}
+		return descs
+	}
+
+	regionConjunctionFn := func(regionName string, numReplicas int32) roachpb.ConstraintsConjunction {
+		return roachpb.ConstraintsConjunction{
+			NumReplicas: numReplicas,
+			Constraints: []roachpb.Constraint{
+				{
+					Type:  roachpb.Constraint_REQUIRED,
+					Key:   "region",
+					Value: regionName,
+				},
+			},
+		}
+	}
+
+	stopper, g, sp, a, _ := CreateTestAllocator(ctx, 10, false /* deterministic */)
+	defer stopper.Stop(ctx)
+	gossiputil.NewStoreGossiper(g).GossipStores(storesFn("a", "a", "b", "b"), t)
+
+	testCases := []struct {
+		name                            string
+		existingVoters                  []roachpb.ReplicaDescriptor
+		existingNonVoters               []roachpb.ReplicaDescriptor
+		spanConfig                      roachpb.SpanConfig
+		expectedPromote, expectedDemote roachpb.ReplicationTarget
+	}{
+		{
+			// promote a1 && demote b(3|4).
+			name:              "[a(non-voter),a,b,b] -> [a,a,b,b(non-voter)]",
+			existingVoters:    replicas(2, 3, 4),
+			existingNonVoters: replicas(1),
+			spanConfig: roachpb.SpanConfig{
+				NumReplicas: 4,
+				NumVoters:   3,
+				Constraints: []roachpb.ConstraintsConjunction{
+					regionConjunctionFn("a", 2), regionConjunctionFn("b", 2),
+				},
+				VoterConstraints: []roachpb.ConstraintsConjunction{
+					regionConjunctionFn("a", 2), regionConjunctionFn("b", 1),
+				},
+			},
+			expectedPromote: roachpb.ReplicationTarget{NodeID: 1, StoreID: 1},
+			expectedDemote:  roachpb.ReplicationTarget{NodeID: 3, StoreID: 3},
+		},
+		{
+			// promote a1 && demote b(3|4).
+			name:              "[a(non-voter),a,b,b] -> [a,a,b,b(non-voter)]",
+			existingVoters:    replicas(2, 3, 4),
+			existingNonVoters: replicas(1),
+			spanConfig: roachpb.SpanConfig{
+				NumReplicas: 4,
+				NumVoters:   3,
+				Constraints: []roachpb.ConstraintsConjunction{
+					regionConjunctionFn("a", 2), regionConjunctionFn("b", 2),
+				},
+				VoterConstraints: []roachpb.ConstraintsConjunction{
+					regionConjunctionFn("a", 2), regionConjunctionFn("b", 1),
+				},
+			},
+			expectedPromote: roachpb.ReplicationTarget{NodeID: 1, StoreID: 1},
+			expectedDemote:  roachpb.ReplicationTarget{NodeID: 3, StoreID: 3},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			promote, demote, _, _ := a.RebalanceTargetForRoleSwap(
+				ctx, sp, &tc.spanConfig, nil, tc.existingVoters, tc.existingNonVoters,
+				allocator.RangeUsageInfo{}, storepool.StoreFilterNone, a.ScorerOptions(ctx))
+			require.Equal(t, tc.expectedPromote, promote)
+			require.Equal(t, tc.expectedDemote, demote)
+		})
+	}
 }

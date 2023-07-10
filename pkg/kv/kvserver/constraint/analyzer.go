@@ -10,7 +10,12 @@
 
 package constraint
 
-import "github.com/cockroachdb/cockroach/pkg/roachpb"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/cockroachdb/cockroach/pkg/roachpb"
+)
 
 // AnalyzedConstraints represents the result of AnalyzeConstraints(). It
 // combines a span config's constraints with information about which stores
@@ -21,7 +26,10 @@ type AnalyzedConstraints struct {
 	// replicas in the range (sum(constraints.NumReplicas) < config.NumReplicas).
 	// In such cases, we allow replicas that don't match any of the per-replica
 	// constraints, but never mark them as necessary.
-	UnconstrainedReplicas bool
+	UnconstrainedReplicas   bool
+  // UnconstrainedReplicaSet contains replicas which satisfy no constraint.
+  // These replicas can be removed without affecting constraint satisfaction.
+	UnconstrainedReplicaSet []roachpb.StoreID
 	// For each conjunction of constraints in the above slice, track which
 	// StoreIDs satisfy them. This field is unused if there are no constraints.
 	SatisfiedBy [][]roachpb.StoreID
@@ -34,6 +42,21 @@ type AnalyzedConstraints struct {
 // EmptyAnalyzedConstraints represents an empty set of constraints that are
 // satisfied by any given configuration of replicas.
 var EmptyAnalyzedConstraints = AnalyzedConstraints{}
+
+// func (ac AnalyzedConstraints) SafeFormat(w redact.SafePrinter, _ rune) {
+// }
+//
+
+func (ac AnalyzedConstraints) String() string {
+	var buf strings.Builder
+
+	fmt.Fprintf(&buf, "('unconstrained'=%v)", ac.UnconstrainedReplicaSet)
+	for i := range ac.Constraints {
+		fmt.Fprintf(&buf, ", ('%v'=%v)", ac.Constraints[i], ac.SatisfiedBy[i])
+	}
+
+	return buf.String()
+}
 
 // StoreResolver resolves a store descriptor by a given ID.
 type StoreResolver interface {
@@ -54,6 +77,7 @@ func AnalyzeConstraints(
 		Constraints: constraints,
 	}
 
+	existingSatisfyingSomeConstraint := make([]bool, len(existing))
 	if len(constraints) > 0 {
 		result.SatisfiedBy = make([][]roachpb.StoreID, len(constraints))
 		result.Satisfies = make(map[roachpb.StoreID][]int)
@@ -62,7 +86,7 @@ func AnalyzeConstraints(
 	var constrainedReplicas int32
 	for i, subConstraints := range constraints {
 		constrainedReplicas += subConstraints.NumReplicas
-		for _, repl := range existing {
+		for replIdx, repl := range existing {
 			// If for some reason we don't have the store descriptor (which shouldn't
 			// happen once a node is hooked into gossip), trust that it's valid. This
 			// is a much more stable failure state than frantically moving everything
@@ -71,9 +95,23 @@ func AnalyzeConstraints(
 			if !ok || CheckStoreConjunction(store, subConstraints.Constraints) {
 				result.SatisfiedBy[i] = append(result.SatisfiedBy[i], store.StoreID)
 				result.Satisfies[store.StoreID] = append(result.Satisfies[store.StoreID], i)
+				// This replica satisfies at least one constraint.
+				existingSatisfyingSomeConstraint[replIdx] = true
 			}
 		}
 	}
+
+	// Find all the replicas which are not satisfying some constraint. These
+	// replicas can later be selected as candidates to swap out, as they do not
+	// contribute to constraint satisfaction (but may contribute to range
+	// diversity).
+	for replIdx, satisfying := range existingSatisfyingSomeConstraint {
+		if !satisfying {
+			result.UnconstrainedReplicaSet = append(result.UnconstrainedReplicaSet,
+				existing[replIdx].StoreID)
+		}
+	}
+
 	if constrainedReplicas > 0 && constrainedReplicas < numReplicas {
 		result.UnconstrainedReplicas = true
 	}

@@ -343,7 +343,9 @@ func (rp ReplicaPlanner) PlanOneChange(
 	// role in satisfying the zone constraints appled to a range, by performing
 	// swaps when the voter and total replica counts are correct in aggregate,
 	// yet incorrect per locality. See #90110.
-	case allocatorimpl.AllocatorConsiderRebalance:
+	case allocatorimpl.AllocatorConsiderRebalance,
+		allocatorimpl.AllocatorRebalanceVoterConstraint,
+		allocatorimpl.AllocatorRebalanceConstraint:
 		op, stats, err = rp.considerRebalance(
 			ctx,
 			repl,
@@ -835,21 +837,40 @@ func (rp ReplicaPlanner) considerRebalance(
 		scorerOpts,
 	)
 	if !ok {
-		// If there was nothing to do for the set of voting replicas on this
-		// range, attempt to rebalance non-voters.
-		log.KvDistribution.VInfof(ctx, 2, "no suitable rebalance target for voters")
-		addTarget, removeTarget, details, ok = rp.allocator.RebalanceNonVoter(
-			ctx,
-			rp.storePool,
-			conf,
-			repl.RaftStatus(),
-			existingVoters,
-			existingNonVoters,
-			rangeUsageInfo,
-			storepool.StoreFilterThrottled,
-			scorerOpts,
-		)
-		rebalanceTargetType = allocatorimpl.NonVoterTarget
+		action, _ := rp.allocator.ComputeAction(ctx, rp.storePool, conf, desc)
+		if action == allocatorimpl.AllocatorRebalanceVoterConstraint {
+      // See if there's an opportunity to roleswap, we know that this is from a
+      // voter constraint violation.
+			addTarget, removeTarget, details, ok = rp.allocator.RebalanceTargetForRoleSwap(
+				ctx,
+				rp.storePool,
+				conf,
+				repl.RaftStatus(),
+				existingVoters,
+				existingNonVoters,
+				rangeUsageInfo,
+				storepool.StoreFilterThrottled,
+				scorerOpts,
+			)
+		}
+
+		if !ok {
+			// If there was nothing to do for the set of voting replicas on this
+			// range, attempt to rebalance non-voters.
+			log.KvDistribution.VInfof(ctx, 2, "no suitable rebalance target for voters")
+			addTarget, removeTarget, details, ok = rp.allocator.RebalanceNonVoter(
+				ctx,
+				rp.storePool,
+				conf,
+				repl.RaftStatus(),
+				existingVoters,
+				existingNonVoters,
+				rangeUsageInfo,
+				storepool.StoreFilterThrottled,
+				scorerOpts,
+			)
+			rebalanceTargetType = allocatorimpl.NonVoterTarget
+		}
 	}
 
 	// Determine whether we can remove the leaseholder without first

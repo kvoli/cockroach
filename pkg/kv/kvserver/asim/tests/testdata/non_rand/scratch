@@ -1,0 +1,64 @@
+gen_cluster nodes=3
+----
+
+add_node locality=region=us-east-1
+----
+
+add_node locality=region=us-east-1
+----
+
+add_node locality=region=us-west-1
+----
+
+add_node locality=region=us-west-1
+----
+
+add_node locality=region=us-central-1
+----
+
+add_node locality=region=us-central-1
+----
+
+add_node locality=region=us-central-1
+----
+
+add_node locality=region=eu-west-1
+----
+
+add_node locality=region=eu-west-1
+----
+
+add_node locality=region=eu-west-1
+----
+
+gen_ranges ranges=100
+----
+
+set_span_config 
+[0,10000): num_replicas=6 num_voters=5 constraints={'+region=eu-west-1':1,'+region=us-central-1':1,'+region=us-east-1':2,'+region=us-west-1':2} voter_constraints={'+region=eu-west-1':1,'+region=us-central-1':1,'+region=us-east-1':2,'+region=us-west-1':1}
+----
+
+set_span_config delay=20m
+[0,10000): num_replicas=6 num_voters=5 constraints={'+region=eu-west-1':1,'+region=us-central-1':1,'+region=us-east-1':1,'+region=us-west-1':1} voter_constraints={'+region=us-west-1':2,'+region=us-east-1':2}
+----
+
+assertion type=conformance under=0 over=0 unavailable=0 violating=0
+----
+
+eval duration=40m samples=20 fail_early_exit=true
+----
+OK
+
+topology
+----
+AU_EAST
+  AU_EAST_1
+  │ └── [1 2 3]
+eu-west-1
+  └── [11 12 13]
+us-central-1
+  └── [8 9 10]
+us-east-1
+  └── [4 5]
+us-west-1
+  └── [6 7]

@@ -140,6 +140,8 @@ const (
 	AllocatorConsiderRebalance
 	AllocatorRangeUnavailable
 	AllocatorFinalizeAtomicReplicationChange
+	AllocatorRebalanceVoterConstraint
+	AllocatorRebalanceConstraint
 )
 
 // Add indicates an action adding a replica.
@@ -227,6 +229,8 @@ var allocatorActionNames = map[AllocatorAction]string{
 	AllocatorConsiderRebalance:               "consider rebalance",
 	AllocatorRangeUnavailable:                "range unavailable",
 	AllocatorFinalizeAtomicReplicationChange: "finalize conf change",
+	AllocatorRebalanceVoterConstraint:        "rebalance voter constraint violation",
+	AllocatorRebalanceConstraint:             "rebalance non-voter constraint violation",
 }
 
 func (a AllocatorAction) String() string {
@@ -271,6 +275,10 @@ func (a AllocatorAction) Priority() float64 {
 		return 300
 	case AllocatorRemoveNonVoter:
 		return 200
+	case AllocatorRebalanceVoterConstraint:
+		return 150
+	case AllocatorRebalanceConstraint:
+		return 100
 	case AllocatorConsiderRebalance, AllocatorRangeUnavailable, AllocatorNoop:
 		return 0
 	default:
@@ -1108,6 +1116,45 @@ func (a *Allocator) computeAction(
 		return action, action.Priority()
 	}
 
+	// TODO(kvoli): Add a check for constraint violation.
+	// We check the constraints for the range, if there are any undersatisfied
+	// constraints then return a constraint repair action.
+	// analyzedOverallConstraints := constraint.AnalyzeConstraints(
+	// 	storePool,
+	// 	append(voterReplicas, nonVoterReplicas...),
+	// 	conf.NumReplicas,
+	// 	conf.Constraints,
+	// )
+	//
+	// analyzedVoterConstraints := constraint.AnalyzeConstraints(
+	// 	storePool,
+	// 	voterReplicas,
+	// 	conf.GetNumVoters(),
+	// 	conf.VoterConstraints,
+	// )
+
+	// If there are any voter constraints which are unsatisfied, or any all
+	// replica constraints, we should rebalance replicas in order to satisfy
+	// these constraints.
+	// NB: There are a correct number of voters and non-voters, they are not on
+	// the correct stores however. Reshuffle them.
+	// for i, c := range analyzedVoterConstraints.Constraints {
+	// 	requiredReplicas := int(c.NumReplicas)
+	// 	haveReplicas := len(analyzedVoterConstraints.SatisfiedBy[i])
+	// 	if haveReplicas < requiredReplicas {
+	// 		action = AllocatorRebalanceVoterConstraint
+	// 		return action, action.Priority()
+	// 	}
+	// }
+	// for i, c := range analyzedOverallConstraints.Constraints {
+	// 	requiredReplicas := int(c.NumReplicas)
+	// 	haveReplicas := len(analyzedOverallConstraints.SatisfiedBy[i])
+	// 	if haveReplicas < requiredReplicas {
+	// 		action = AllocatorRebalanceConstraint
+	// 		return action, action.Priority()
+	// 	}
+	// }
+	//
 	// Nothing needs to be done, but we may want to rebalance.
 	action = AllocatorConsiderRebalance
 	return action, action.Priority()
@@ -1458,6 +1505,168 @@ func (a *Allocator) allocateTargetFromList(
 	}
 
 	return roachpb.ReplicationTarget{}, ""
+}
+
+// rebalanceTargetForConstraints retruns a suitable store for a rebalance
+// target (of the given type).
+//
+// Solve it just for the voter constraint violation case here.
+func (a Allocator) RebalanceTargetForRoleSwap(
+	ctx context.Context,
+	storePool storepool.AllocatorStorePool,
+	conf *roachpb.SpanConfig,
+	raftStatus *raft.Status,
+	existingVoters, existingNonVoters []roachpb.ReplicaDescriptor,
+	rangeUsageInfo allocator.RangeUsageInfo,
+	filter storepool.StoreFilter,
+	options ScorerOptions,
+) (promote, demote roachpb.ReplicationTarget, details string, ok bool) {
+	analyzedVoterConstraints := constraint.AnalyzeConstraints(
+		storePool,
+		existingVoters,
+		conf.GetNumVoters(),
+		conf.VoterConstraints,
+	)
+
+	log.Infof(ctx, "analyzed voter constraints=%+v", analyzedVoterConstraints)
+	// We expect there to be:
+	// 1. Correct number of voters,   e.g. Num_Voters  =3 replicas=[a,a,a]
+	// 2. Correct number of replicas. e.g. Num_Replicas=3 replicas=[a(non-voter),a(non_voter),a]
+	// 3. By combination of 2 and 3 (replicas-voters=non-voters), there should be
+	//    a correct number of non-voters.
+	//
+	// Swapping has no effect on diversity either (not exactly true).
+	var unsatisfiedVoterIndexes, overSatisfiedVoterIndexes, exactlySatisfiedVoterIndexes []int
+	for i, c := range analyzedVoterConstraints.Constraints {
+		neededVoters := int(c.NumReplicas)
+		haveVoters := len(analyzedVoterConstraints.SatisfiedBy[i])
+		if haveVoters > neededVoters {
+			// NB: This voter may be satisfying another voter constraint, we need to
+			// check. Currently, this doesn't check whether the voter constraint is
+			// satisfied.
+			overSatisfiedVoterIndexes = append(overSatisfiedVoterIndexes, i)
+		} else if haveVoters < neededVoters {
+			// We know the constraint conjunction is unsatisfied, we should check
+			// whether there are any existing non-voters which satisfy this
+			// constraint. If so, then they are a candidate to promote to be a voter.
+			unsatisfiedVoterIndexes = append(unsatisfiedVoterIndexes, i)
+		} else {
+			// The constraint is exactly satisfied, removing some voter, without
+			// replacing it with another voter satisfying this constraint would lead
+			// to a constraint violation.
+			exactlySatisfiedVoterIndexes = append(exactlySatisfiedVoterIndexes, i)
+		}
+	}
+
+	// TODO(kvoli): Remove this.
+	existsInList := func(list []int, i int) bool {
+		for _, val := range list {
+			if val == i {
+				return true
+			}
+		}
+		return false
+	}
+
+	// We want a rebalance to trigger, require that existing.necessary >
+	// The steps following:
+	// 1. Check for any voter constraint conjunctions which are:
+	//    a. Unsatisfied by the existing voters
+	//    b. Satisfied by an existing non-voter
+	// 2. If there is a pair (a) and (b), then take the role swap.
+	//
+	// e.g.
+	// voter constraint unsatisfied.
+	//   num_replicas      = 4
+	//   num_voters        = 3
+	//   constraints       = a:1,b:2,
+	//   voter_constraints = a:2
+	//   replicas          = [a1(non-voter),a2,b1,b2]
+	//   ------
+	//   action            = promote(a) && (demote(b1) || demote(b2))
+	//
+	// replica constraint unsatisfied: A replica satisfying a voter constraint,
+	// should necessarily be satsifying an all replica constraint, i.e. a voter
+	// on store i cannot satisfy fewer total constraints (voter + replica), than
+	// a non-voter on the same store. A voter is a superset of a replica,
+	// satisfying all the replica constraints that a replica does, with the
+	// addition of 0+ voter constraints.
+	//
+	// Try and find some voter constraint which is under-satisfied, and some all
+	// replica constraint which is over-satisfied.
+	// Demoting doesn't affect replica constraints, only voter constraints. There
+	// are no under satisfied voter constraints, so there's nothing to do.
+	if len(unsatisfiedVoterIndexes) > 0 && len(overSatisfiedVoterIndexes) > 0 {
+		log.Infof(ctx, "unsatisfied voters=%v oversatisfied voters=%v",
+			unsatisfiedVoterIndexes, overSatisfiedVoterIndexes)
+	}
+
+	// For each voter constraint which is currently unsatisfied
+	//  - A corresponding DEMOTION of a oversatisfied voter constraint is
+	//    necessary.
+	//  - AND a promotion of a non-voting replica which would satisfy the
+	//    unsatisfied constraint.
+	var promoCandidates, demoCandidates []roachpb.StoreID
+	for _, nonVoter := range existingNonVoters {
+		for _, unsatisfiedIdx := range unsatisfiedVoterIndexes {
+			storeDesc, ok := storePool.GetStoreDescriptor(nonVoter.StoreID)
+			if ok && constraint.CheckStoreConjunction(storeDesc,
+				analyzedVoterConstraints.Constraints[unsatisfiedIdx].Constraints) {
+				promoCandidates = append(promoCandidates, nonVoter.StoreID)
+			}
+		}
+	}
+
+	// We are adding these are oversatisfied here, however they could be
+	// necessarily satisfying some other voter constraint. This makes the
+	// computation difficult.
+	//
+	// TODO(kvoli):
+	// We need to check whether the demotion candidates are satisfying ANY voter
+	// constraint, which when demoted would become unsatisfied. e.g. consider the constraints
+	// +a:2(3), where a requires 2 voters and has 3.
+	// +b:2(2), where b requires 2 voters and has 2.
+	// If some existing voter, necessarily satisfies both b and a, then despite
+	// oversatisfying a, we cannot demote it from being a voter due to the +b
+	// constraint, which would become unsatisfied upon demotion.
+	//
+	// Beyond this case, if no existing VOTER can be demoted to a NON_VOTER,
+	// without causing another unsatisfied constraint (trading 1:1, or worse
+	// 1:>1), then abort and log loudly.
+	demoCandidates = append(demoCandidates, analyzedVoterConstraints.UnconstrainedReplicaSet...)
+	for _, overSatisfiedIdx := range overSatisfiedVoterIndexes {
+		demoCandidates = append(demoCandidates, analyzedVoterConstraints.SatisfiedBy[overSatisfiedIdx]...)
+		for _, storeID := range analyzedVoterConstraints.SatisfiedBy[overSatisfiedIdx] {
+			// Check for each voter which satisfies an oversatisfied constraint,
+			// whether it satisfies any other constraints which are no oversatisfied,
+			// or exactly satisfied.
+			for _, constraintIdx := range analyzedVoterConstraints.Satisfies[storeID] {
+				// This voter is not necessary to satisfy any voter constraint, it can
+				// safely be demoted to a non-voter, and another voter added.
+				if !existsInList(exactlySatisfiedVoterIndexes, constraintIdx) &&
+        !existsInList(unsatisfiedVoterIndexes, constraintIdx) {
+					demoCandidates = append(demoCandidates, storeID)
+				}
+			}
+		}
+	}
+
+	zero := roachpb.ReplicationTarget{}
+	if len(demoCandidates) == 0 || len(promoCandidates) == 0 {
+		return zero, zero, "", false
+	}
+
+	log.Infof(ctx, "promo candidates=%v demotion candidates=%v", promoCandidates, demoCandidates)
+
+	return roachpb.ReplicationTarget{
+			NodeID: roachpb.NodeID(promoCandidates[0]),
+			// TODO(kvoli): Whilst this logic is correct, need to call
+			// rebalanceTarget here, it is the only safe option.
+			StoreID: promoCandidates[0],
+		}, roachpb.ReplicationTarget{
+			NodeID:  roachpb.NodeID(demoCandidates[0]),
+			StoreID: demoCandidates[0],
+		}, "voter constraint unsatisfied, role swap", true
 }
 
 func (a Allocator) simulateRemoveTarget(
