@@ -23,7 +23,7 @@ const (
 	defaultPacerLoopInterval       = 10 * time.Minute
 	defaultPacerMinIterInterval    = 10 * time.Millisecond
 	defaultPacerMaxIterIterval     = 1 * time.Second
-	defaultStateExchangeInterval   = 10 * time.Second
+	defaultStateExchangeInterval   = 120 * time.Second
 	defaultStateExchangeDelay      = 500 * time.Millisecond
 	defaultSplitQPSThreshold       = 2500
 	defaultSplitStatRetention      = 10 * time.Minute

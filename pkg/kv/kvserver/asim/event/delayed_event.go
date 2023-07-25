@@ -24,7 +24,10 @@ func (del DelayedEventList) Len() int { return len(del) }
 
 // Less implements sort.Interface.
 func (del DelayedEventList) Less(i, j int) bool {
-	return del[i].At.Before(del[j].At)
+	if del[i].At.Before(del[j].At) {
+		return true
+	}
+	return i < j
 }
 
 // Swap implements sort.Interface.
