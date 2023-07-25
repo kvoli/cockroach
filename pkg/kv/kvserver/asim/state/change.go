@@ -36,6 +36,11 @@ type Change interface {
 	Blocking() bool
 }
 
+type HistoricalChange struct {
+	Change
+	Tick time.Time
+}
+
 // Changer takes state changes and applies them with delay.
 type Changer interface {
 	// Push appends a state change to occur. There must not be more than one
@@ -46,6 +51,9 @@ type Changer interface {
 	// Tick updates state changer to apply any changes that have occurred
 	// between the last tick and this one.
 	Tick(tick time.Time, state State)
+	// History returns the history of changes, that have been applied by the
+	// changes.
+	History() []HistoricalChange
 }
 
 // ReplicaChange contains information necessary to add, remove or move (both) a
@@ -413,6 +421,7 @@ type replicaChanger struct {
 	pendingTickets map[int]Change
 	pendingTarget  map[StoreID]time.Time
 	pendingRange   map[RangeID]int
+	history        []HistoricalChange
 }
 
 // NewReplicaChanger returns an implementation of the changer interface for
@@ -471,6 +480,11 @@ func (rc *replicaChanger) Push(tick time.Time, change Change) (time.Time, bool) 
 	pc := &pendingChange{ticket: ticket, completeAt: completeAt}
 	rc.completeAt.ReplaceOrInsert(pc)
 
+	rc.history = append(rc.history, HistoricalChange{
+		Change: change,
+		Tick:   tick,
+	})
+
 	return completeAt, true
 }
 
@@ -498,4 +512,8 @@ func (rc *replicaChanger) Tick(tick time.Time, state State) {
 		delete(rc.pendingTickets, ticket)
 		delete(rc.pendingRange, change.Range())
 	}
+}
+
+func (rc *replicaChanger) History() []HistoricalChange {
+	return rc.history
 }

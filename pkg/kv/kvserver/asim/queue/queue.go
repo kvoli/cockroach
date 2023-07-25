@@ -37,6 +37,7 @@ type RangeQueue interface {
 	// on the action taken. Replicas in the queue are processed in order of
 	// priority, then in FIFO order on ties.
 	Tick(ctx context.Context, tick time.Time, state state.State)
+	History() []state.RangeID
 }
 
 // replicaItem represents an item in the replica queue.

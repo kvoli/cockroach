@@ -26,11 +26,17 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
 
+
 type replicateQueue struct {
 	baseQueue
 	planner  plan.ReplicationPlanner
 	clock    *hlc.Clock
 	settings *config.SimulationSettings
+	history  []state.RangeID
+}
+
+func (rq *replicateQueue)	History() []state.RangeID {
+  return rq.history
 }
 
 // NewReplicateQueue returns a new replicate queue.
@@ -82,6 +88,7 @@ func (rq *replicateQueue) MaybeAdd(ctx context.Context, replica state.Replica, s
 		simCanTransferleaseFrom,
 	)
 
+  rq.history = append(rq.history, replica.Range())
 	if !shouldPlanChange {
 		return false
 	}

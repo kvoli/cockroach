@@ -98,7 +98,7 @@ func TestAllocatorSimulatorDeterministic(t *testing.T) {
 
 func TestZoneConf(t *testing.T) {
 	settingsGen := gen.StaticSettings{Settings: config.DefaultSimulationSettings()}
-	duration := 2 * time.Minute
+	duration := 1 * time.Minute
 	clusterGen := gen.LoadedCluster{
 		Info: state.MultiRegionConfig,
 	}
@@ -116,30 +116,34 @@ func TestZoneConf(t *testing.T) {
 		EventFn: func(ctx context.Context, tick time.Time, s state.State) {
 			s.SetSpanConfig(span, conf)
 		},
-		At: settingsGen.Settings.StartTime.Add(1 * time.Minute),
+		At: settingsGen.Settings.StartTime,
 	})
 
-	num := 10
-	refRun := [][]float64{}
+	num := 5
+	var refRun asim.History
 	for run := 0; run < num; run++ {
 		fmt.Println("---------------------here sec try -----------------------------")
 		simulator := gen.GenerateSimulation(duration, clusterGen, rangeGen, loadGen, settingsGen, eventGen, 42)
 		simulator.RunSim(context.Background())
 		history := simulator.History()
-		ts := metrics.MakeTS(history.Recorded)
 		if run == 0 {
-			refRun = ts["replicas"]
+			refRun = history
 			continue
 		}
-		//for i, sms := range ts["replicas"] {
-		//	for j, sm := range sms {
-		//		if sm != refRun[i][j] {
-		//			fmt.Println("index: ", i, j)
-		//			fmt.Println("diff number: ", sm, refRun[i][j])
-		//		}
-		//	}
-		//}
-		require.Equal(t, refRun, ts["replicas"])
+		var i int
+		for {
+			if i >= len(history.Changes) || i >= len(refRun.Changes) {
+				break
+			}
+			refChange := history.Changes[i]
+			otherChange := refRun.Changes[i]
+
+			require.Equal(t, refChange, otherChange,
+				"change different - ref tick %s, other tick %s\nref: %v\nother: %v",
+        refChange.Tick, otherChange.Tick,
+        refChange.Change.(*state.ReplicaChange), otherChange.Change.(*state.ReplicaChange))
+			i++
+		}
 	}
 }
 

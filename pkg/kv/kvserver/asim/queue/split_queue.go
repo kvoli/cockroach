@@ -25,6 +25,10 @@ type splitQueue struct {
 	settings *config.SimulationSettings
 }
 
+func (sq *splitQueue)	History() []state.RangeID {
+  return nil
+}
+
 // NewSplitQueue returns a new split queue, implementing the range queue
 // interface.
 func NewSplitQueue(

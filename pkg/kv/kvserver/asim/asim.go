@@ -67,8 +67,10 @@ type Simulator struct {
 // Currently it only contains the store metrics of the run.
 // TODO(kvoli): Add a range log like structure to the history.
 type History struct {
-	Recorded [][]metrics.StoreMetrics
-	S        state.State
+	Recorded      [][]metrics.StoreMetrics
+	S             state.State
+	Changes       []state.HistoricalChange
+	QueueOrdering [][]state.RangeID
 }
 
 // Listen implements the metrics.StoreMetricListener interface.
@@ -183,6 +185,17 @@ func (s *Simulator) GetNextTickTime() (done bool, tick time.Time) {
 // History returns the current recorded history of a simulation run. Calling
 // this on a Simulator that has not begun will return an empty history.
 func (s *Simulator) History() History {
+	// var storeIDs state.StoreIDSlice
+	// for store := range s.rqs {
+	// 	storeIDs = append(storeIDs, store)
+	// }
+	//
+	// sort.Sort(storeIDs)
+	// for _, storeID := range storeIDs {
+	// 	s.history.queueOrdering = append(s.history.queueOrdering, s.rqs[storeID].History())
+	// }
+
+	s.history.Changes = s.changer.History()
 	return s.history
 }
 

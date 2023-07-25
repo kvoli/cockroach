@@ -1278,6 +1278,7 @@ type node struct {
 	nodeID NodeID
 	desc   roachpb.NodeDescriptor
 
+  // check this is the same between runs
 	stores []StoreID
 }
 
