@@ -3320,7 +3320,7 @@ func sendAddRemoteSSTs(
 					counts.DataSize, remainingBytesInTargetRange,
 				)
 				expiration := execCtx.ExecCfg().Clock.Now().AddDuration(time.Hour)
-				if err := execCtx.ExecCfg().DB.AdminSplit(ctx, restoringSubspan.Key, expiration); err != nil {
+				if err := execCtx.ExecCfg().DB.AdminSplit(ctx, restoringSubspan.Key, expiration, "restore"); err != nil {
 					log.Warningf(ctx, "failed to split during experimental restore: %v", err)
 				}
 				if _, err := execCtx.ExecCfg().DB.AdminScatter(ctx, restoringSubspan.Key, 4<<20); err != nil {

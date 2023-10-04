@@ -947,7 +947,7 @@ func (r *Replica) executeAdminBatch(
 	switch tArgs := args.(type) {
 	case *kvpb.AdminSplitRequest:
 		var reply kvpb.AdminSplitResponse
-		reply, pErr = r.AdminSplit(ctx, *tArgs, "manual")
+		reply, pErr = r.AdminSplit(ctx, *tArgs, tArgs.Details)
 		resp = &reply
 
 	case *kvpb.AdminUnsplitRequest:

@@ -659,10 +659,11 @@ func (db *DB) AdminSplit(
 	ctx context.Context,
 	splitKey interface{},
 	expirationTime hlc.Timestamp,
+	details string,
 	predicateKeys ...roachpb.Key,
 ) error {
 	b := &Batch{}
-	b.adminSplit(splitKey, expirationTime, predicateKeys)
+	b.adminSplit(splitKey, expirationTime, predicateKeys, details)
 	return getOneErr(db.Run(ctx, b), b)
 }
 

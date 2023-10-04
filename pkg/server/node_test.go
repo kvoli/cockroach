@@ -559,6 +559,7 @@ func TestNodeStatusWritten(t *testing.T) {
 		context.Background(),
 		splitKey,
 		hlc.MaxTimestamp, /* expirationTime */
+    "",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -874,6 +875,7 @@ func TestGetTenantWeights(t *testing.T) {
 		ctx,
 		prefix,           /* splitKey */
 		hlc.MaxTimestamp, /* expirationTime */
+    "sst-batcher",
 	))
 	// The range can have replicas on multiple stores, so wait for the split to
 	// be applied everywhere.

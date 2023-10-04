@@ -576,7 +576,7 @@ func (b *SSTBatcher) doFlush(ctx context.Context, reason int) error {
 				log.Warningf(ctx, "%s failed to generate split-above key: %v", b.name, err)
 			} else {
 				beforeSplit := timeutil.Now()
-				err := b.db.AdminSplit(ctx, splitAbove, expire)
+				err := b.db.AdminSplit(ctx, splitAbove, expire, "sst-batcher")
 				b.currentStats.SplitWait += timeutil.Since(beforeSplit)
 				if err != nil {
 					log.Warningf(ctx, "%s failed to split-above: %v", b.name, err)
@@ -591,7 +591,7 @@ func (b *SSTBatcher) doFlush(ctx context.Context, reason int) error {
 			log.Warningf(ctx, "%s failed to generate split key: %v", b.name, err)
 		} else {
 			beforeSplit := timeutil.Now()
-			err := b.db.AdminSplit(ctx, splitAt, expire)
+			err := b.db.AdminSplit(ctx, splitAt, expire, "sst-batcher")
 			b.currentStats.SplitWait += timeutil.Since(beforeSplit)
 			if err != nil {
 				log.Warningf(ctx, "%s failed to split: %v", b.name, err)

@@ -122,6 +122,7 @@ func TestIntentResolution(t *testing.T) {
 				context.Background(),
 				splitKey,
 				hlc.MaxTimestamp, /* expirationTime */
+				"intent-test",
 			); err != nil {
 				t.Fatal(err)
 			}

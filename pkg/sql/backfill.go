@@ -2259,7 +2259,7 @@ func (sc *SchemaChanger) backfillIndexes(
 	if sc.execCfg.Codec.ForSystemTenant() {
 		expirationTime := sc.db.KV().Clock().Now().Add(time.Hour.Nanoseconds(), 0)
 		for _, span := range addingSpans {
-			if err := sc.db.KV().AdminSplit(ctx, span.Key, expirationTime); err != nil {
+			if err := sc.db.KV().AdminSplit(ctx, span.Key, expirationTime, "index-backfill"); err != nil {
 				return err
 			}
 		}

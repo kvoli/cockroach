@@ -58,7 +58,7 @@ func (is *indexSplitAndScatter) MaybeSplitIndexSpans(
 	span := table.IndexSpan(is.codec, indexToBackfill.GetID())
 	const backfillSplitExpiration = time.Hour
 	expirationTime := is.db.Clock().Now().Add(backfillSplitExpiration.Nanoseconds(), 0)
-	return is.db.AdminSplit(ctx, span.Key, expirationTime)
+	return is.db.AdminSplit(ctx, span.Key, expirationTime, "index-split-and-scatter")
 }
 
 func (is *indexSplitAndScatter) shouldSplitAndScatter(idx catalog.Index) bool {

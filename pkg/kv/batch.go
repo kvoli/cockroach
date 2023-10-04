@@ -930,7 +930,7 @@ func (b *Batch) adminMerge(key interface{}) {
 // adminSplit is only exported on DB. It is here for symmetry with the
 // other operations.
 func (b *Batch) adminSplit(
-	splitKeyIn interface{}, expirationTime hlc.Timestamp, predicateKeys []roachpb.Key,
+	splitKeyIn interface{}, expirationTime hlc.Timestamp, predicateKeys []roachpb.Key, details string,
 ) {
 	splitKey, err := marshalKey(splitKeyIn)
 	if err != nil {
@@ -944,6 +944,7 @@ func (b *Batch) adminSplit(
 		SplitKey:       splitKey,
 		ExpirationTime: expirationTime,
 		PredicateKeys:  predicateKeys,
+		Details:               details,
 	}
 	b.appendReqs(req)
 	b.initResult(1, 0, notRaw, nil)

@@ -61,7 +61,7 @@ func (n *splitNode) Next(params runParams) (bool, error) {
 		return false, err
 	}
 
-	if err := execCfg.DB.AdminSplit(params.ctx, rowKey, n.expirationTime); err != nil {
+	if err := execCfg.DB.AdminSplit(params.ctx, rowKey, n.expirationTime, "sql"); err != nil {
 		return false, err
 	}
 

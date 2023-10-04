@@ -253,6 +253,7 @@ type splitAndScatterer interface {
 		ctx context.Context,
 		splitKey roachpb.Key,
 		expirationTime hlc.Timestamp,
+		details string,
 	) error
 
 	scatter(
@@ -268,9 +269,9 @@ type dbSplitAndScatter struct {
 }
 
 func (s *dbSplitAndScatter) split(
-	ctx context.Context, splitKey roachpb.Key, expirationTime hlc.Timestamp,
+	ctx context.Context, splitKey roachpb.Key, expirationTime hlc.Timestamp, details string,
 ) error {
-	return s.db.AdminSplit(ctx, splitKey, expirationTime)
+	return s.db.AdminSplit(ctx, splitKey, expirationTime, details)
 }
 
 func (s *dbSplitAndScatter) scatter(ctx context.Context, scatterKey roachpb.Key) error {
@@ -361,7 +362,7 @@ func splitAndScatter(
 ) error {
 	log.Infof(ctx, "splitting and scattering at %s", splitAndScatterKey)
 	expirationTime := s.now().AddDuration(splitAndScatterSitckyBitDuration)
-	if err := s.split(ctx, splitAndScatterKey, expirationTime); err != nil {
+	if err := s.split(ctx, splitAndScatterKey, expirationTime, "stream-ingest"); err != nil {
 		return err
 	}
 	if err := s.scatter(ctx, splitAndScatterKey); err != nil {
