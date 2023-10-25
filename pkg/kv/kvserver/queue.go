@@ -141,6 +141,10 @@ type replicaItem struct {
 
 // setProcessing moves the item from an enqueued state to a processing state.
 func (i *replicaItem) setProcessing() {
+	if i.processing {
+		log.Fatalf(context.Background(),
+			"r%d already marked as processing", i.rangeID)
+	}
 	i.priority = 0
 	if i.index >= 0 {
 		log.Fatalf(context.Background(),
@@ -717,8 +721,9 @@ func (bq *baseQueue) maybeAdd(ctx context.Context, repl replicaInQueue, now hlc.
 		return
 	}
 	_, err := bq.addInternal(ctx, repl.Desc(), repl.ReplicaID(), priority)
-	if !isExpectedQueueError(err) {
-		log.Errorf(ctx, "unable to add: %+v", err)
+	if err != nil {
+		log.Errorf(ctx, "range=%v priority=%v unable to add: %+v",
+			repl.GetRangeID(), priority, err)
 	}
 }
 
@@ -758,6 +763,8 @@ func (bq *baseQueue) addInternal(
 
 	// If the replica is currently in purgatory, don't re-add it.
 	if _, ok := bq.mu.purgatory[desc.RangeID]; ok {
+		log.Infof(ctx, "range=%v priority=%v not adding because in purgatory",
+			desc.RangeID, priority)
 		return false, nil
 	}
 
@@ -767,6 +774,8 @@ func (bq *baseQueue) addInternal(
 		if item.processing {
 			wasRequeued := item.requeue
 			item.requeue = true
+			log.Infof(ctx, "range=%v priority=%v wasRequeued=%v replica is already processing marking for requeue",
+				desc.RangeID, priority, wasRequeued)
 			return !wasRequeued, nil
 		}
 
@@ -960,6 +969,7 @@ func (bq *baseQueue) recordProcessDuration(ctx context.Context, dur time.Duratio
 // ctx should already be annotated by both bq.AnnotateCtx() and
 // repl.AnnotateCtx().
 func (bq *baseQueue) processReplica(ctx context.Context, repl replicaInQueue) error {
+	log.Infof(ctx, "[start process fn replica]")
 	// Load the system config if it's needed.
 	var confReader spanconfig.StoreReader
 	if bq.needsSpanConfigs {
@@ -1116,6 +1126,8 @@ func (bq *baseQueue) finishProcessingReplica(
 	callbacks := item.callbacks
 	requeue := item.requeue
 	item.callbacks = nil
+	// XXXX: potential fix?
+	// item.processing = false
 	bq.removeFromReplicaSetLocked(repl.GetRangeID())
 	item = nil // prevent accidental use below
 	bq.mu.Unlock()
@@ -1141,6 +1153,7 @@ func (bq *baseQueue) finishProcessingReplica(
 		bq.failures.Inc(1)
 		if storeBenign {
 			bq.storeFailures.Inc(1)
+			log.Infof(ctx, "store benign err=%v, requeuing", err)
 			requeue = true
 		}
 
@@ -1341,6 +1354,11 @@ func (bq *baseQueue) addLocked(item *replicaItem) {
 // error) or from the priority queue by index. Caller must hold mutex.
 func (bq *baseQueue) removeLocked(item *replicaItem) {
 	if item.processing {
+		if log.V(2) {
+			log.Infof(bq.AnnotateCtx(context.Background()),
+				"can't remove item r%d, already processing, marking requeue",
+				item.rangeID)
+		}
 		// The item is processing. We can't intererupt the processing
 		// or remove it from the replica set yet, but we can make sure
 		// it doesn't get requeued.

@@ -40,7 +40,7 @@ import (
 func registerDecommission(r registry.Registry) {
 	{
 		numNodes := 4
-		duration := time.Hour
+		duration := 2 * time.Hour
 
 		r.Add(registry.TestSpec{
 			Name:             fmt.Sprintf("decommission/nodes=%d/duration=%s", numNodes, duration),
@@ -1480,8 +1480,8 @@ func execCLI(
 // Increase the logging verbosity for decommission tests to make life easier
 // debugging failures.
 const decommissionVModuleStartOpts = `--vmodule=store_rebalancer=5,allocator=5,
-  allocator_scorer=5,replicate_queue=5,replicate=6,split_queue=5,
-  replica_command=2,replica_raft=2,replica_proposal=2,replica_application_result=1`
+  allocator_scorer=5,replicate_queue=5,replicate=6,split_queue=5,queue=5,
+  replica_command=2,replica_raft=1,replica_proposal=1,replica_application_result=1`
 
 func withDecommissionVMod(startOpts option.StartOpts) option.StartOpts {
 	startOpts.RoachprodOpts.ExtraArgs = append(
