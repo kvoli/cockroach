@@ -919,7 +919,7 @@ func measureQPS(
 				defer wg.Done()
 				var v float64
 				if err := db.QueryRowContext(
-					ctx, `SELECT value FROM crdb_internal.node_metrics WHERE name = 'sql.insert.count'`,
+					ctx, `SELECT value FROM crdb_internal.node_metrics WHERE name = 'sql.query.count'`,
 				).Scan(&v); err != nil {
 					t.Fatal(err)
 				}
