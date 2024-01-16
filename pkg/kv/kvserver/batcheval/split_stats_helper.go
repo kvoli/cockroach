@@ -145,52 +145,14 @@ func makeSplitStatsHelper(input splitStatsHelperInput) (splitStatsHelper, error)
 		in: input,
 	}
 
-	// Scan to compute the stats for the first side.
-	var absPostSplitFirst enginepb.MVCCStats
-	var err error
-	if h.in.ScanRightFirst {
-		absPostSplitFirst, err = input.PostSplitScanRightFn()
-		h.absPostSplitRight = &absPostSplitFirst
-	} else {
-		absPostSplitFirst, err = input.PostSplitScanLeftFn()
-		h.absPostSplitLeft = &absPostSplitFirst
-	}
-	if err != nil {
-		return splitStatsHelper{}, err
-	}
+	// Simple heuristic to use the existing stats divided equally between the
+	// resulting LHS and RHS.
+	h.absPostSplitRight = &enginepb.MVCCStats{}
+	h.absPostSplitLeft = &enginepb.MVCCStats{}
+	h.absPostSplitRight.Add(input.AbsPreSplitBothStored)
+	h.absPostSplitRight.Div(2)
+	h.absPostSplitLeft.Add(*h.absPostSplitRight)
 
-	if h.in.AbsPreSplitBothStored.ContainsEstimates == 0 &&
-		h.in.DeltaBatchEstimated.ContainsEstimates == 0 {
-		// We have CombinedErrorDelta zero, so use arithmetic to compute the
-		// stats for the second side.
-		ms := h.in.AbsPreSplitBothStored
-		ms.Subtract(absPostSplitFirst)
-		ms.Add(h.in.DeltaBatchEstimated)
-		ms.Add(h.in.DeltaRangeKey)
-		if h.in.ScanRightFirst {
-			h.absPostSplitLeft = &ms
-		} else {
-			h.absPostSplitRight = &ms
-		}
-		return h, nil
-	}
-
-	// Estimates are contained in the input, so ask the oracle to scan to compute
-	// the stats for the second side. We only scan the second side when either of
-	// the input stats above (AbsPreSplitBothStored or DeltaBatchEstimated)
-	// contains estimates, so that we can guarantee that the post-splits stats
-	// don't.
-	var absPostSplitSecond enginepb.MVCCStats
-	if h.in.ScanRightFirst {
-		absPostSplitSecond, err = input.PostSplitScanLeftFn()
-		h.absPostSplitLeft = &absPostSplitSecond
-	} else {
-		absPostSplitSecond, err = input.PostSplitScanRightFn()
-		h.absPostSplitRight = &absPostSplitSecond
-	}
-	if err != nil {
-		return splitStatsHelper{}, err
-	}
 	return h, nil
 }
 

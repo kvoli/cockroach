@@ -202,6 +202,31 @@ func (ms *MVCCStats) Subtract(oms MVCCStats) {
 	ms.AbortSpanBytes -= oms.AbortSpanBytes
 }
 
+// Div multiplies ms by the scale provided.
+func (ms *MVCCStats) Div(factor int64) {
+	ms.ContainsEstimates ++
+
+	ms.LockAge /= factor
+	ms.GCBytesAge /= factor
+	ms.LiveBytes /= factor
+	ms.KeyBytes /= factor
+	ms.ValBytes /= factor
+	ms.IntentBytes /= factor
+	ms.LiveCount /= factor
+	ms.KeyCount /= factor
+	ms.ValCount /= factor
+	ms.IntentCount /= factor
+	ms.LockBytes /= factor
+	ms.LockCount /= factor
+	ms.RangeKeyCount /= factor
+	ms.RangeKeyBytes /= factor
+	ms.RangeValCount /= factor
+	ms.RangeValBytes /= factor
+	ms.SysBytes /= factor
+	ms.SysCount /= factor
+	ms.AbortSpanBytes /= factor
+}
+
 // IsInline returns true if the value is inlined in the metadata.
 func (meta MVCCMetadata) IsInline() bool {
 	return meta.RawBytes != nil
