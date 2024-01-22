@@ -279,4 +279,23 @@ func registerTPCE(r registry.Registry) {
 			runTPCE(ctx, t, c, largeWeekly)
 		},
 	})
+
+	largeMoreNodes := tpceOptions{
+		customers: 100_000,
+		nodes:     9,
+		cpus:      16,
+		ssds:      1,
+	}
+	r.Add(registry.TestSpec{
+		Name:             fmt.Sprintf("tpce/c=%d/nodes=%d", largeMoreNodes.customers, largeMoreNodes.nodes),
+		Owner:            registry.OwnerTestEng,
+		Benchmark:        true,
+		CompatibleClouds: registry.AllExceptAWS,
+		Suites:           registry.Suites(registry.Weekly),
+		Timeout:          36 * time.Hour,
+		Cluster:          r.MakeClusterSpec(largeMoreNodes.nodes+1, spec.CPU(largeMoreNodes.cpus), spec.VolumeSize(1000), spec.GCEVolumeType("pd-ssd")),
+		Run: func(ctx context.Context, t test.Test, c cluster.Cluster) {
+			runTPCE(ctx, t, c, largeMoreNodes)
+		},
+	})
 }
