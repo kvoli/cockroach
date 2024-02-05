@@ -1018,6 +1018,9 @@ func (r *Replica) MaybeQueue(ctx context.Context, now hlc.ClockTimestamp) {
 	r.store.mergeQueue.Async(ctx, "span config update", true /* wait */, func(ctx context.Context, h queueHelper) {
 		h.MaybeAdd(ctx, r, now)
 	})
+	r.store.leaseQueue.Async(ctx, "span config update", true /* wait */, func(ctx context.Context, h queueHelper) {
+		h.MaybeAdd(ctx, r, now)
+	})
 	if EnqueueInMvccGCQueueOnSpanConfigUpdateEnabled.Get(&r.store.GetStoreConfig().Settings.SV) {
 		r.store.mvccGCQueue.Async(ctx, "span config update", true /* wait */, func(ctx context.Context, h queueHelper) {
 			h.MaybeAdd(ctx, r, now)

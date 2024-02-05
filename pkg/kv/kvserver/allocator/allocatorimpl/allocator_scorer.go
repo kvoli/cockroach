@@ -75,7 +75,7 @@ const (
 	// DefaultReplicaIOOverloadThreshold is used to avoid allocating to stores with an
 	// IO overload score greater than what's set. This is typically used in
 	// conjunction with IOOverloadMeanThreshold below.
-	DefaultReplicaIOOverloadThreshold = 0.4
+	DefaultReplicaIOOverloadThreshold = 0.3
 
 	// DefaultLeaseIOOverloadThreshold is used to block lease transfers to stores
 	// with an IO overload score greater than this threshold. This is typically
@@ -85,7 +85,7 @@ const (
 	// DefaultLeaseIOOverloadShedThreshold is used to shed leases from stores
 	// with an IO overload score greater than the this threshold. This is
 	// typically used in conjunction with IOOverloadMeanThreshold below.
-	DefaultLeaseIOOverloadShedThreshold = 0.5
+	DefaultLeaseIOOverloadShedThreshold = 0.4
 
 	// IOOverloadMeanThreshold is the percentage above the mean after which a
 	// store could be conisdered IO overload if also exceeding the absolute IO
@@ -213,7 +213,7 @@ var LeaseIOOverloadThresholdEnforcement = settings.RegisterEnumSetting(
 		"`block_transfer_to` a store will receive no new leases but won't lose existing leases,"+
 		"`shed`: a store will receive no new leases and shed existing leases to "+
 		"non io-overloaded stores, this is a superset of block_transfer_to",
-	"block_transfer_to",
+	"shed",
 	map[int64]string{
 		int64(IOOverloadThresholdIgnore):         "ignore",
 		int64(IOOverloadThresholdBlockTransfers): "block_transfer_to",

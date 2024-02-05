@@ -80,8 +80,8 @@ func runLimitCapacity(ctx context.Context, t test.Test, c cluster.Cluster, cfg l
 	appNode := c.Node(appNodeID)
 	limitedNode := c.Node(limitedNodeID)
 
-	initialDuration := 10 * time.Minute
-	limitDuration := 2 * time.Minute
+	initialDuration := 5 * time.Minute
+	limitDuration := 1 * time.Minute
 
 	c.Start(ctx, t.L(), option.DefaultStartOpts(), install.MakeClusterSettings(), nodes)
 	conn := c.Conn(ctx, t.L(), 1)
@@ -139,6 +139,9 @@ func runLimitCapacity(ctx context.Context, t test.Test, c cluster.Cluster, cfg l
 	for _, cancel := range cancels {
 		cancel()
 	}
+
+	require.GreaterOrEqual(t, qpsRelative, 0.8,
+		"QPS relative to baseline was less than accepted threshold")
 	// We should be able to assert on the throughput not dropping beyond a
 	// certain % of the throughput prior to limiting a node's capacity.
 	//

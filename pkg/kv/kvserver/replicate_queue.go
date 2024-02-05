@@ -938,35 +938,12 @@ func (rq *replicateQueue) processOneChange(
 // preProcessCheck checks the lease  and destroy status of the replica. This is
 // done to ensure that the replica has a valid lease, correct lease type and is
 // not destroyed.
-// TODO(baptist): Remove this check. It is redundant with Queue.replicaCanBeProcessed
 func (rq *replicateQueue) preProcessCheck(ctx context.Context, repl *Replica) error {
 	// Check lease and destroy status here. The queue does this higher up already, but
 	// adminScatter (and potential other future callers) also call this method and don't
 	// perform this check, which could lead to infinite loops.
 	if _, err := repl.IsDestroyed(); err != nil {
 		return err
-	}
-
-	// Ensure ranges have a lease (returning NLHE if someone else has it), and
-	// switch the lease type if necessary (e.g. due to
-	// kv.expiration_leases_only.enabled).
-	//
-	// TODO(kvoli): This check should fail if not the leaseholder. In the case
-	// where we want to use the replicate queue to acquire leases, this should
-	// occur before planning or as a result. In order to return this in planning,
-	// it is necessary to simulate the prior change having succeeded to then plan
-	// this lease transfer.
-	//
-	// TODO(erikgrinaker): This is also done more eagerly during Raft ticks, but
-	// that doesn't work for quiesced epoch-based ranges, so we have a fallback
-	// here that usually runs within 10 minutes.
-	leaseStatus, pErr := repl.redirectOnOrAcquireLease(ctx)
-	if pErr != nil {
-		return pErr.GoError()
-	}
-	pErr = repl.maybeSwitchLeaseType(ctx, leaseStatus)
-	if pErr != nil {
-		return pErr.GoError()
 	}
 	return nil
 }
@@ -1032,7 +1009,6 @@ type ReplicaLeaseMover interface {
 //
 // TODO(kvoli): Evaluate whether we want to keep this. It would be nice to move
 // all application methods off of the replicate queue into somewhere neutral.
-// This synchronous method won't work easily with simulation.
 type RangeRebalancer interface {
 	// TransferLease uses a LeaseMover interface to move a lease between stores.
 	// The QPS is used to update stats for the stores.

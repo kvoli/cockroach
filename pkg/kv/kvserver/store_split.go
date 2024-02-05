@@ -201,10 +201,12 @@ func splitPostApply(
 	// queue may not have picked it up (due to the need for a split). Enqueue
 	// both the left and right ranges to speed up a potentially necessary
 	// replication. See #7022 and #7800.
+	r.store.leaseQueue.MaybeAddAsync(ctx, r, now)
 	r.store.replicateQueue.MaybeAddAsync(ctx, r, now)
 
 	if rightReplOrNil != nil {
 		r.store.splitQueue.MaybeAddAsync(ctx, rightReplOrNil, now)
+		r.store.leaseQueue.MaybeAddAsync(ctx, rightReplOrNil, now)
 		r.store.replicateQueue.MaybeAddAsync(ctx, rightReplOrNil, now)
 		if len(split.RightDesc.Replicas().Descriptors()) == 1 {
 			// TODO(peter): In single-node clusters, we enqueue the right-hand side of

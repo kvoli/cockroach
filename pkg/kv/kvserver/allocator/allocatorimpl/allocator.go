@@ -366,10 +366,10 @@ func (s ReplicaStatus) String() string {
 // SafeValue implements the redact.SafeValue interface.
 func (t ReplicaStatus) SafeValue() {}
 
-type transferDecision int
+type accessLocalityTransferDecision int
 
 const (
-	_ transferDecision = iota
+	_ accessLocalityTransferDecision = iota
 	shouldTransfer
 	shouldNotTransfer
 	decideWithoutStats
@@ -2523,6 +2523,63 @@ func getLoadDelta(
 	return maxCandidateLoad - minCandidateLoad
 }
 
+type TransferLeaseDecision int
+
+const (
+	_ TransferLeaseDecision = iota
+	DontTransferLease
+	TransferLeaseForCountBalance
+	TransferLeaseForAccessLocality
+	TransferLeaseForIOOverload
+	TransferLeaseForPreferences
+)
+
+func (t TransferLeaseDecision) ShouldTransfer() bool {
+	switch t {
+	case TransferLeaseForCountBalance, TransferLeaseForAccessLocality, TransferLeaseForIOOverload, TransferLeaseForPreferences:
+		return true
+	case DontTransferLease:
+		return false
+	default:
+		panic(fmt.Sprintf("unknown transfer lease decisioin %d", t))
+	}
+}
+
+func (t TransferLeaseDecision) Priority() float64 {
+	switch t {
+	case TransferLeaseForPreferences:
+		return 300
+	case TransferLeaseForIOOverload:
+		return 200
+	case TransferLeaseForAccessLocality:
+		return 100
+	case TransferLeaseForCountBalance:
+		return 0
+	case DontTransferLease:
+		return 0
+	default:
+		panic(fmt.Sprintf("unknown transfer lease decision %d", t))
+	}
+}
+
+// SafeValue implements the redact.SafeValue interface.
+func (t TransferLeaseDecision) SafeValue() {}
+
+func (t TransferLeaseDecision) String() string {
+	switch t {
+	case TransferLeaseForCountBalance:
+		return "transfer(lease count)"
+	case TransferLeaseForAccessLocality:
+		return "transfer(access locality)"
+	case TransferLeaseForIOOverload:
+		return "transfer(io-overload)"
+	case TransferLeaseForPreferences:
+		return "transfer(preferences)"
+	default:
+		panic(fmt.Sprintf("unknown transfer lease decision %d", t))
+	}
+}
+
 // ShouldTransferLease returns true if the specified store is overfull in terms
 // of leases with respect to the other stores matching the specified
 // attributes.
@@ -2538,14 +2595,14 @@ func (a *Allocator) ShouldTransferLease(
 		GetFirstIndex() kvpb.RaftIndex
 	},
 	usageInfo allocator.RangeUsageInfo,
-) bool {
+) TransferLeaseDecision {
 	if a.leaseholderShouldMoveDueToPreferences(ctx, storePool, conf, leaseRepl, existing) {
-		return true
+		return TransferLeaseForPreferences
 	}
 
 	if a.leaseholderShouldMoveDueToIOOverload(
 		ctx, storePool, existing, leaseRepl.StoreID(), a.IOOverloadOptions()) {
-		return true
+		return TransferLeaseForIOOverload
 	}
 
 	existing = a.ValidLeaseTargets(
@@ -2560,11 +2617,11 @@ func (a *Allocator) ShouldTransferLease(
 
 	// Short-circuit if there are no valid targets out there.
 	if len(existing) == 0 || (len(existing) == 1 && existing[0].StoreID == leaseRepl.StoreID()) {
-		return false
+		return DontTransferLease
 	}
 	source, ok := storePool.GetStoreDescriptor(leaseRepl.StoreID())
 	if !ok {
-		return false
+		return DontTransferLease
 	}
 
 	sl, _, _ := storePool.GetStoreList(storepool.StoreFilterSuspect)
@@ -2581,20 +2638,23 @@ func (a *Allocator) ShouldTransferLease(
 		nil,
 		sl.CandidateLeases.Mean,
 	)
-	var result bool
+	var result TransferLeaseDecision
 	switch transferDec {
 	case shouldNotTransfer:
-		result = false
+		result = DontTransferLease
 	case shouldTransfer:
-		result = true
+		result = TransferLeaseForAccessLocality
 	case decideWithoutStats:
-		result = a.shouldTransferLeaseForLeaseCountConvergence(ctx, storePool, sl, source, existing)
+		if a.shouldTransferLeaseForLeaseCountConvergence(ctx, storePool, sl, source, existing) {
+			result = TransferLeaseForCountBalance
+		} else {
+			result = DontTransferLease
+		}
 	default:
 		log.KvDistribution.Fatalf(ctx, "unexpected transfer decision %d", transferDec)
 	}
-
 	log.KvDistribution.VEventf(
-		ctx, 3, "ShouldTransferLease decision (lease-holder=s%d): %t", leaseRepl.StoreID(), result,
+		ctx, 3, "ShouldTransferLease decision (lease-holder=s%d): %v", leaseRepl.StoreID(), result,
 	)
 	return result
 }
@@ -2634,7 +2694,7 @@ func (a Allocator) shouldTransferLeaseForAccessLocality(
 	usageInfo allocator.RangeUsageInfo,
 	rebalanceAdjustments map[roachpb.StoreID]float64,
 	candidateLeasesMean float64,
-) (transferDecision, roachpb.ReplicaDescriptor) {
+) (accessLocalityTransferDecision, roachpb.ReplicaDescriptor) {
 	// Only use load-based rebalancing if it's enabled and we have both
 	// stats and locality information to base our decision on.
 	if usageInfo.RequestLocality == nil ||

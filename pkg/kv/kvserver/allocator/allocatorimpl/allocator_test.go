@@ -2712,7 +2712,7 @@ func TestAllocatorShouldTransferLease(t *testing.T) {
 				},
 				allocator.RangeUsageInfo{},
 			)
-			if c.expected != result {
+			if c.expected != result.ShouldTransfer() {
 				t.Fatalf("expected %v, but found %v", c.expected, result)
 			}
 		})
@@ -2781,7 +2781,7 @@ func TestAllocatorShouldTransferLeaseDraining(t *testing.T) {
 				},
 				allocator.RangeUsageInfo{},
 			)
-			if c.expected != result {
+			if c.expected != result.ShouldTransfer() {
 				t.Fatalf("expected %v, but found %v", c.expected, result)
 			}
 		})
@@ -2826,7 +2826,7 @@ func TestAllocatorShouldTransferSuspected(t *testing.T) {
 			&mockRepl{storeID: 2, replicationFactor: 3},
 			allocator.RangeUsageInfo{},
 		)
-		require.Equal(t, expected, result)
+		require.Equal(t, expected, result.ShouldTransfer())
 	}
 	timeAfterNodeSuspect := liveness.TimeAfterNodeSuspect.Get(&a.st.SV)
 	// Based on capacity node 1 is desirable.
@@ -2936,7 +2936,7 @@ func TestAllocatorShouldTransferLeaseIOOverload(t *testing.T) {
 				},
 				allocator.RangeUsageInfo{}, /* stats */
 			)
-			require.Equal(t, tc.expected, shouldTransfer)
+			require.Equal(t, tc.expected, shouldTransfer.ShouldTransfer())
 		})
 	}
 

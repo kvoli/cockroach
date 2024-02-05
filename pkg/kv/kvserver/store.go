@@ -845,6 +845,7 @@ type Store struct {
 	replRankingsByTenant *ReplicaRankingMap
 	storeRebalancer      *StoreRebalancer
 	rangeIDAlloc         *idalloc.Allocator // Range ID allocator
+	leaseQueue           *leaseQueue        // Lease queue
 	mvccGCQueue          *mvccGCQueue       // MVCC GC queue
 	mergeQueue           *mergeQueue        // Range merging queue
 	splitQueue           *splitQueue        // Range splitting queue
@@ -1621,6 +1622,7 @@ func NewStore(
 			s.cfg.AmbientCtx, s.cfg.Clock, cfg.ScanInterval,
 			cfg.ScanMinIdleTime, cfg.ScanMaxIdleTime, newStoreReplicaVisitor(s),
 		)
+		s.leaseQueue = newLeaseQueue(s, s.allocator)
 		s.mvccGCQueue = newMVCCGCQueue(s)
 		s.mergeQueue = newMergeQueue(s, s.db)
 		s.splitQueue = newSplitQueue(s, s.db)
@@ -1634,7 +1636,7 @@ func NewStore(
 		// pkg/ui/src/views/reports/containers/enqueueRange/index.tsx
 		s.scanner.AddQueues(
 			s.mvccGCQueue, s.mergeQueue, s.splitQueue, s.replicateQueue, s.replicaGCQueue,
-			s.raftLogQueue, s.raftSnapshotQueue, s.consistencyQueue)
+			s.raftLogQueue, s.raftSnapshotQueue, s.consistencyQueue, s.leaseQueue)
 		tsDS := s.cfg.TimeSeriesDataStore
 		if s.cfg.TestingKnobs.TimeSeriesDataStore != nil {
 			tsDS = s.cfg.TestingKnobs.TimeSeriesDataStore
@@ -1647,8 +1649,12 @@ func NewStore(
 		}
 	}
 
+	// TODO(kvoli): add lease queue disabled testing knob.
 	if cfg.TestingKnobs.DisableGCQueue {
 		s.setGCQueueActive(false)
+	}
+	if cfg.TestingKnobs.DisableLeaseQueue {
+		s.setLeaseQueueActive(false)
 	}
 	if cfg.TestingKnobs.DisableMergeQueue {
 		s.setMergeQueueActive(false)
@@ -2569,8 +2575,24 @@ func (s *Store) GossipStore(ctx context.Context, useCached bool) error {
 // UpdateIOThreshold updates the IOThreshold reported in the StoreDescriptor.
 func (s *Store) UpdateIOThreshold(ioThreshold *admissionpb.IOThreshold) {
 	s.ioThreshold.Lock()
-	defer s.ioThreshold.Unlock()
 	s.ioThreshold.t = ioThreshold
+	s.ioThreshold.Unlock()
+
+	// TODO(kvoli): Create a IO overload listener or similar which signals a
+	// channel when IO overload exceeds a threshold.
+	now := s.cfg.Clock.NowAsClockTimestamp()
+	shedThreshold := allocatorimpl.LeaseIOOverloadShedThreshold.Get(&s.cfg.Settings.SV)
+	if score, _ := ioThreshold.Score(); score >= shedThreshold {
+		log.Infof(context.Background(),
+			"mass enqueueing leases due to IO overload exceeding shed threshold (%f > %f)",
+			score, shedThreshold)
+		s.VisitReplicas(func(repl *Replica) (wantMore bool) {
+			s.leaseQueue.Async(context.Background(), "IO overload > shed threshold", true /* wait */, func(ctx context.Context, h queueHelper) {
+				h.MaybeAdd(ctx, repl, now)
+			})
+			return true
+		})
+	}
 }
 
 // VisitReplicasOption optionally modifies store.VisitReplicas.
