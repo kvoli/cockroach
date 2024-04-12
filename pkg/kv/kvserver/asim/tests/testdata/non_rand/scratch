@@ -1,0 +1,54 @@
+gen_cluster nodes=5
+----
+
+set_locality node=1 locality=region=a
+----
+
+set_locality node=2 locality=region=b
+----
+
+set_locality node=3 locality=region=c
+----
+
+set_locality node=4 locality=region=c
+----
+
+set_locality node=5 locality=region=d
+----
+
+
+gen_ranges ranges=5 repl_factor=4
+----
+
+set_span_config  
+[0,10000): num_replicas=4 num_voters=3 constraints={'+region=a':1,'+region=b':1,'+region=c':1,'+region=d':1}} voter_constraints={'+region=a':1,'+region=b':1,'+region=c':1}
+----
+
+set_span_config  delay=10m
+[0,10000): num_replicas=4 num_voters=3 constraints={'+region=a':1,'+region=b':1,'+region=c':1} voter_constraints={'+region=c':2}
+----
+
+assertion type=conformance under=0 over=0 unavailable=0 violating=0
+----
+
+eval duration=30m
+----
+failed assertion sample 1
+  conformance unavailable=0 under=0 over=0 violating=0 
+  actual unavailable=0 under=0, over=0 violating=2 lease-violating=0 lease-less-preferred=0
+violating constraints:
+  r1:000000{0000-2000} [(n1,s1):1, (n2,s2):2, (n4,s4):4, (n5,s5):5NON_VOTER] applying num_replicas=4 num_voters=3 constraints=[+region=a:1 +region=b:1 +region=c:1] voter_constraints=[+region=c:2]
+  r3:000000{4000-6000} [(n2,s2):4, (n4,s4):2, (n1,s1):3, (n5,s5):5NON_VOTER] applying num_replicas=4 num_voters=3 constraints=[+region=a:1 +region=b:1 +region=c:1] voter_constraints=[+region=c:2]
+
+topology
+----
+a
+  └── [1]
+b
+  └── [2]
+c
+  └── [3 4]
+d
+  └── [5]
+
+# vim:ft=sh
