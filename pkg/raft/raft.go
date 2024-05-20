@@ -221,6 +221,8 @@ type Config struct {
 	// multiple raft group, each raft group can have its own logger
 	Logger Logger
 
+	Eventer Eventer
+
 	// DisableProposalForwarding set to true means that followers will drop
 	// proposals, rather than forwarding them to the leader. One use case for
 	// this feature would be in a situation where the Raft leader is used to
@@ -388,7 +390,8 @@ type raft struct {
 	tick func()
 	step stepFunc
 
-	logger Logger
+	logger  Logger
+	eventer Eventer
 }
 
 func newRaft(c *Config) *raft {
@@ -412,6 +415,7 @@ func newRaft(c *Config) *raft {
 		electionTimeout:             c.ElectionTick,
 		heartbeatTimeout:            c.HeartbeatTick,
 		logger:                      c.Logger,
+		eventer:                     c.Eventer,
 		checkQuorum:                 c.CheckQuorum,
 		preVote:                     c.PreVote,
 		disableProposalForwarding:   c.DisableProposalForwarding,
@@ -753,6 +757,7 @@ func (r *raft) appendEntry(es ...pb.Entry) (accepted bool) {
 	for i := range es {
 		es[i].Term = r.Term
 		es[i].Index = li + 1 + uint64(i)
+    r.eventer(es[i], "appending entry")
 	}
 	// Track the size of this uncommitted proposal.
 	if !r.increaseUncommittedSize(es) {

@@ -20,7 +20,11 @@ import (
 	"log"
 	"os"
 	"sync"
+
+	"github.com/cockroachdb/cockroach/pkg/raft/raftpb"
 )
+
+type Eventer func(raftpb.Entry, string)
 
 type Logger interface {
 	Debug(v ...interface{})

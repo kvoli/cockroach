@@ -583,7 +583,9 @@ func (b *propBuf) FlushLockedWithRaftGroup(
 				firstErr = err
 				continue
 			}
-			sl := []raftpb.Entry{{Type: typ, Data: data}}
+      // TODO(kvoli): Introduce ProposalID as a proto type in the raft package,
+      // then use throughout in place of kvserverbase.CmdIDKey.
+			sl := []raftpb.Entry{{Type: typ, Data: data, ProposalID: []byte(p.idKey)}}
 			// Send config change in a single-element batch. We go through
 			// proposeBatch since there's observability in there.
 			//

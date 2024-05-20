@@ -2504,6 +2504,11 @@ func (r *Replica) RangeUsageInfo() allocator.RangeUsageInfo {
 	}
 }
 
+func (r *Replica) Eventer(entry raftpb.Entry, event string) {
+	// Find the context which corresponds to the raft entry.
+	traceProposals(r, []kvserverbase.CmdIDKey{kvserverbase.CmdIDKey(entry.ProposalID)}, event)
+}
+
 // measureNanosRunning measures the difference in cpu time from when this
 // method is called, to when the returned function is called. This difference
 // is recorded against the replica's cpu time attribution.

@@ -256,13 +256,11 @@ func (r *Replica) traceEntries(ents []raftpb.Entry, event string) {
 // in entries contained in msgs. The vmodule level for raft must be at
 // least 1.
 func (r *Replica) traceMessageSends(msgs []raftpb.Message, event string) {
-	if log.V(1) || r.store.TestingKnobs().TraceAllRaftEvents {
-		var ids []kvserverbase.CmdIDKey
-		for _, m := range msgs {
-			ids = extractIDs(ids, m.Entries)
-		}
-		traceProposals(r, ids, event)
+	var ids []kvserverbase.CmdIDKey
+	for _, m := range msgs {
+		ids = extractIDs(ids, m.Entries)
 	}
+	traceProposals(r, ids, event)
 }
 
 // extractIDs decodes and appends each of the ids corresponding to the entries
