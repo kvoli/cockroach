@@ -301,6 +301,28 @@ func TestReplicaSliceOptimizeReplicaOrder(t *testing.T) {
 			},
 			expOrdered: []roachpb.NodeID{1, 4, 3, 2},
 		},
+		{
+			// Try to repro bad sorting:
+			name:     "repro",
+			nodeID:   2,
+			locality: locality(t, []string{"cloud=gce", "region=us-east1", "zone=us-east1-b"}),
+			latencies: map[roachpb.NodeID]time.Duration{
+				1: 421777,
+				2: 257200,
+				3: 414448,
+				4: 64803697,
+				5: 66974153,
+				6: 84963903,
+			},
+			slice: ReplicaSlice{
+				info(t, 1, 1, []string{"cloud=gce", "region=us-east1", "zone=us-east1-b"}),
+				info(t, 3, 3, []string{"cloud=gce", "region=us-east1", "zone=us-east1-b"}),
+				info(t, 4, 4, []string{"cloud=gce", "region=us-west1", "zone=us-west1-b"}),
+				info(t, 5, 5, []string{"cloud=gce", "region=us-west1", "zone=us-west1-b"}),
+				info(t, 6, 6, []string{"cloud=gce", "region=europe-west2", "zone=eu-west2-b"}),
+			},
+			expOrdered: []roachpb.NodeID{3, 1, 4, 5, 6},
+		},
 	}
 	for _, test := range testCases {
 		t.Run(test.name, func(t *testing.T) {
