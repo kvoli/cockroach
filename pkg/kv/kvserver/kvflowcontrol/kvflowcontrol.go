@@ -147,13 +147,14 @@ func GetV2EnabledWhenLeaderLevel(
 	if knobs != nil && knobs.OverrideV2EnabledWhenLeaderLevel != nil {
 		return knobs.OverrideV2EnabledWhenLeaderLevel()
 	}
+	// XXX: DNM
 	if st.Version.IsActive(ctx, clusterversion.V24_3_UseRACV2Full) {
 		// Full RACv2 can be enabled: RACv2 protocol with V2 entry encoding.
-		return V2EnabledWhenLeaderV2Encoding
+		return V2NotEnabledWhenLeader
 	}
 	if st.Version.IsActive(ctx, clusterversion.V24_3_UseRACV2WithV1EntryEncoding) {
 		// Partial RACv2 can be enabled: RACv2 protocol with V1 entry encoding.
-		return V2EnabledWhenLeaderV1Encoding
+		return V2NotEnabledWhenLeader
 	}
 	// RACv2 is not enabled.
 	return V2NotEnabledWhenLeader
