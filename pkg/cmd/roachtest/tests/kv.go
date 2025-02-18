@@ -364,7 +364,7 @@ func registerKV(r registry.Registry) {
 		}
 
 		var skipPostValidations registry.PostValidation
-		if opts.blockSize == 1<<16 {
+		if opts.blockSize >= 1<<12 /* 4 KB */ {
 			// Large block size variations may timeout waiting for replica divergence
 			// post-test validation due to high write volume, see #141007.
 			skipPostValidations = registry.PostValidationReplicaDivergence
