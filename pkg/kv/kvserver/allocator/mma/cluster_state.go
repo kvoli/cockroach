@@ -200,8 +200,22 @@ func makeLeaseTransferChanges(
 		panic(fmt.Sprintf(
 			"new leaseholder replica doesn't exist on store %v", addTarget))
 	}
+
 	remove := existingReplicas[removeIdx]
 	add := existingReplicas[addIdx]
+	// Sanity check the lease transfer, we cannot transfer a lease to a replica
+	// that is already a leaseholder, nor can we transfer a lease from a replica
+	// that is not the leaseholder.
+	if !remove.IsLeaseholder {
+		panic(fmt.Sprintf(
+			"r%v lease transfer-from target %v isn't the leaseholder %v replicas=%v",
+			rangeID, removeTarget, remove.ReplicaState, existingReplicas))
+	}
+	if add.IsLeaseholder {
+		panic(fmt.Sprintf(
+			"r%v lease transfer-to target %v is already the leaseholder %v replicas=%v",
+			rangeID, addTarget, add.ReplicaState, existingReplicas))
+	}
 
 	removeLease := replicaChange{
 		target:  removeTarget,
@@ -1224,9 +1238,7 @@ func (cs *clusterState) undoPendingChange(cid changeID) {
 // createPendingChanges takes a set of changes for a range and applies the
 // changes as pending. The application updates the adjusted load, tracked
 // pending changes and changeID to reflect the pending application.
-func (cs *clusterState) createPendingChanges(
-	rangeID roachpb.RangeID, changes ...replicaChange,
-) []*pendingReplicaChange {
+func (cs *clusterState) createPendingChanges(changes ...replicaChange) []*pendingReplicaChange {
 	var pendingChanges []*pendingReplicaChange
 	now := cs.ts.Now()
 
@@ -1245,6 +1257,9 @@ func (cs *clusterState) createPendingChanges(
 		cs.pendingChanges[cid] = pendingChange
 		storeState.adjusted.loadPendingChanges[cid] = pendingChange
 		rangeState.pendingChanges = append(rangeState.pendingChanges, pendingChange)
+		// We will need to recompute the constraints as the range is anticipated to
+		// change.
+		rangeState.constraints = nil
 		pendingChanges = append(pendingChanges, pendingChange)
 	}
 	return pendingChanges

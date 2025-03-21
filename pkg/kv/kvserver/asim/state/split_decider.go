@@ -96,7 +96,7 @@ func (s *SplitDecider) Record(tick time.Time, rangeID RangeID, le workload.LoadE
 		s.deciders[rangeID] = decider
 	}
 
-	qps := LoadEventQPS(le)
+	qps := loadEventQPS(le)
 	shouldSplit := decider.Record(
 		context.Background(),
 		tick,

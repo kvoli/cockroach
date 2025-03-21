@@ -37,9 +37,17 @@ type ReplicaLoad interface {
 	ResetLoad()
 }
 
-// LoadEventQPS returns the QPS for a given workload event.
-func LoadEventQPS(le workload.LoadEvent) float64 {
+// loadEventQPS returns the QPS for a given workload event.
+func loadEventQPS(le workload.LoadEvent) float64 {
 	return float64(le.Reads) + float64(le.Writes)
+}
+
+func loadEventRequestCPU(le workload.LoadEvent) float64 {
+	return float64(le.Reads+le.Writes) * requestCPUPerRequest
+}
+
+func loadEventRaftCPU(le workload.LoadEvent) float64 {
+	return float64(le.Writes) * raftCPUPerWriteRequest
 }
 
 // ReplicaLoadCounter is the sum of all key accesses and size of bytes, both written
@@ -68,7 +76,7 @@ func (rl *ReplicaLoadCounter) ApplyLoad(le workload.LoadEvent) {
 	rl.WriteBytes += le.WriteSize
 	rl.WriteKeys += le.Writes
 
-	rl.loadStats.RecordBatchRequests(LoadEventQPS(le), 0)
+	rl.loadStats.RecordBatchRequests(loadEventQPS(le), 0)
 	rl.loadStats.RecordWriteBytes(float64(le.WriteSize))
 	// TODO(kvoli): Recording the load on every load counter is horribly
 	// inefficient at the moment. It multiplies the time taken per test almost
@@ -79,10 +87,10 @@ func (rl *ReplicaLoadCounter) ApplyLoad(le workload.LoadEvent) {
 	// TODO: We can either allow the workload generator to specify the CPU usage
 	// of the load event, or we can calculate it based on the number of requests
 	// and the size of the requests. At the moment we just assume a fixed cost of
-	// 1ms per request, then another 1ms for raft if it is a write.
-	rl.loadStats.RecordReqCPUNanos(requestCPUPerRequest)
+	// 1ms per (r|w) access, then another 1ms for raft per write.
+	rl.loadStats.RecordReqCPUNanos(loadEventRequestCPU(le))
 	if le.Writes > 0 {
-		rl.loadStats.RecordRaftCPUNanos(raftCPUPerWriteRequest)
+		rl.loadStats.RecordRaftCPUNanos(loadEventRaftCPU(le))
 	}
 }
 

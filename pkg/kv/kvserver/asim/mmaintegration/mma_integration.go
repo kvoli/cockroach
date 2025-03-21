@@ -6,11 +6,13 @@
 package mmaintegration
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/mma"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/asim/state"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
 
 // MakeStoreLeaseholderMsgFromState creates a StoreLeaseholderMsg from the
@@ -25,6 +27,7 @@ func MakeStoreLeaseholderMsgFromState(
 			// replica on this store.
 			continue
 		}
+    log.Infof(context.Background(), "s%v r%v leaseholder msg", storeID, replica.Range())
 		rng, ok := s.Range(replica.Range())
 		if !ok {
 			panic("simulator state is missing a range that should exist")

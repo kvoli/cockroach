@@ -86,6 +86,9 @@ func (a *allocatorState) rebalanceStores(
 	// the allocator is initialized when starting a server so the NodeID is not
 	// yet known.
 	localNodeID := a.cs.stores[localStoreID].NodeID
+	if localNodeID != 1 {
+		return nil
+	}
 	// To select which stores are overloaded, we use a notion of overload that
 	// is based on cluster means (and of course individual store/node
 	// capacities). We do not want to loop through all ranges in the cluster,
@@ -267,16 +270,23 @@ func (a *allocatorState) rebalanceStores(
 					NodeID:  ss.NodeID,
 					StoreID: ss.StoreID,
 				}
+				log.Infof(ctx, "range_id=%v rstate=[(replicas=%v) (pending=%v) (constraints=%v)]", rangeID, rstate.replicas, rstate.pendingChanges, rstate.constraints)
+
 				leaseChanges := makeLeaseTransferChanges(
 					rangeID, rstate.replicas, rstate.load, addTarget, removeTarget)
-				pendingChanges := a.cs.createPendingChanges(rangeID, leaseChanges[:]...)
+				pendingChanges := a.cs.createPendingChanges(leaseChanges[:]...)
 				changes = append(changes, PendingRangeChange{
 					RangeID:               rangeID,
 					pendingReplicaChanges: pendingChanges[:],
 				})
 				leaseTransferCount++
 				if changes[len(changes)-1].IsChangeReplicas() || !changes[len(changes)-1].IsTransferLease() {
-					panic(fmt.Sprintf("lease transfer is invalid: %v", changes[len(changes)-1]))
+					panic(fmt.Sprintf("lease transfer is invalid: is_change_replicas=%v is_transfer_lease=%v change=%v rstate=[replicas=%v pendingChanges=%v constraints=%v]",
+						changes[len(changes)-1].IsChangeReplicas(),
+						changes[len(changes)-1].IsTransferLease(),
+						changes[len(changes)-1].pendingReplicaChanges,
+						rstate.replicas, rstate.pendingChanges,
+						rstate.constraints))
 				}
 				log.Infof(ctx,
 					"shedding=n%vs%v range %v lease from store %v to store %v [%v] with "+
@@ -410,7 +420,7 @@ func (a *allocatorState) rebalanceStores(
 			}
 			replicaChanges := makeRebalanceReplicaChanges(
 				rangeID, rstate.replicas, rstate.load, addTarget, removeTarget)
-			pendingChanges := a.cs.createPendingChanges(rangeID, replicaChanges[:]...)
+			pendingChanges := a.cs.createPendingChanges(replicaChanges[:]...)
 			changes = append(changes, PendingRangeChange{
 				RangeID:               rangeID,
 				pendingReplicaChanges: pendingChanges[:],

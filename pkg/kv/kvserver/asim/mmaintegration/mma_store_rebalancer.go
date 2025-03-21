@@ -70,6 +70,9 @@ func NewMMAStoreRebalancer(
 func (msr *MMAStoreRebalancer) Tick(ctx context.Context, tick time.Time, s state.State) {
 	ctx = msr.ResetAndAnnotateCtx(ctx)
 	ctx = logtags.AddTag(ctx, "t", tick.Sub(msr.settings.StartTime))
+	if msr.localStoreID != 1 {
+		return
+	}
 	if msr.pendingTicket == -1 &&
 		tick.Sub(msr.lastRebalanceTime) < msr.settings.LBRebalancingInterval {
 		// We are waiting out the rebalancing interval. Nothing to do.
