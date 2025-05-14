@@ -107,3 +107,23 @@ func ReplicaDescriptorToReplicaIDAndType(
 		},
 	}
 }
+
+// MakeMMARangeMsg constructs a mma.RangeMsg.
+func MakeMMARangeMsg(
+	desc *roachpb.RangeDescriptor,
+	usage RangeUsageInfo,
+	lh roachpb.StoreID,
+	config roachpb.SpanConfig,
+) mma.RangeMsg {
+	replicaDescriptors := desc.Replicas().Descriptors()
+	replicasState := make([]mma.StoreIDAndReplicaState, len(replicaDescriptors))
+	for i, r := range replicaDescriptors {
+		replicasState[i] = ReplicaDescriptorToReplicaIDAndType(r, lh)
+	}
+	return mma.RangeMsg{
+		Conf:      config,
+		RangeID:   desc.RangeID,
+		Replicas:  replicasState,
+		RangeLoad: UsageInfoToMMALoad(usage),
+	}
+}

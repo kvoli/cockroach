@@ -1087,66 +1087,7 @@ func (cs *clusterState) processStoreLeaseholderMsgInternal(
 	cs.gcPendingChanges(now)
 
 	for _, rangeMsg := range msg.Ranges {
-		rs, ok := cs.ranges[rangeMsg.RangeID]
-		if !ok {
-			// This is the first time we've seen this range.
-			rs = newRangeState()
-			cs.ranges[rangeMsg.RangeID] = rs
-		}
-		// Set the range state and store state to match the range message state
-		// initially. The pending changes which are not enacted in the range
-		// message are handled and added back below.
-		rs.load = rangeMsg.RangeLoad
-		for _, replica := range rs.replicas {
-			ss := cs.stores[replica.StoreID]
-			if ss == nil {
-				panic(fmt.Sprintf("store %d not found stores=%v", replica.StoreID, cs.stores))
-			}
-			delete(cs.stores[replica.StoreID].adjusted.replicas, rangeMsg.RangeID)
-		}
-		rs.replicas = append(rs.replicas[:0], rangeMsg.Replicas...)
-		for _, replica := range rangeMsg.Replicas {
-			cs.stores[replica.StoreID].adjusted.replicas[rangeMsg.RangeID] = replica.ReplicaState
-		}
-
-		// Find any pending changes which are now enacted, according to the
-		// leaseholder.
-		var remainingChanges, enactedChanges []*pendingReplicaChange
-		for _, change := range rs.pendingChanges {
-			ss := cs.stores[change.target.StoreID]
-			adjustedReplicas, ok := ss.adjusted.replicas[rangeMsg.RangeID]
-			if !ok {
-				adjustedReplicas.ReplicaID = noReplicaID
-			}
-			if adjustedReplicas.subsumesChange(change.prev.ReplicaIDAndType, change.next) {
-				// The change has been enacted according to the leaseholder.
-				enactedChanges = append(enactedChanges, change)
-			} else {
-				remainingChanges = append(remainingChanges, change)
-			}
-		}
-
-		for _, change := range enactedChanges {
-			// Mark the change as enacted. Enacting a change does not remove the
-			// corresponding load adjustments. The store load message will do that,
-			// or GC, indiciating that the change is been reflected in the store
-			// load.
-			cs.markPendingChangeEnacted(change.ChangeID, now)
-		}
-		// Re-apply the remaining changes.
-		for _, change := range remainingChanges {
-			cs.applyReplicaChange(change.ReplicaChange)
-		}
-		normSpanConfig, err := makeNormalizedSpanConfig(&rangeMsg.Conf, cs.constraintMatcher.interner)
-		if err != nil {
-			// TODO(kvoli): Should we log as a warning here, or return further back out?
-			panic(err)
-		}
-		rs.conf = normSpanConfig
-		// NB: Always recompute the analyzed range constraints for any range,
-		// assuming the leaseholder wouldn't have sent the message if there was no
-		// change.
-		rs.constraints = nil
+		cs.processStoreLeaseholderRangeMsg(now, rangeMsg)
 	}
 	localss := cs.stores[msg.StoreID]
 	cs.meansMemo.clear()
@@ -1243,6 +1184,69 @@ func (cs *clusterState) processStoreLeaseholderMsgInternal(
 
 }
 
+func (cs *clusterState) processStoreLeaseholderRangeMsg(now time.Time, rangeMsg RangeMsg) {
+	rs, ok := cs.ranges[rangeMsg.RangeID]
+	if !ok {
+		// This is the first time we've seen this range.
+		rs = newRangeState()
+		cs.ranges[rangeMsg.RangeID] = rs
+	}
+	// Set the range state and store state to match the range message state
+	// initially. The pending changes which are not enacted in the range
+	// message are handled and added back below.
+	rs.load = rangeMsg.RangeLoad
+	for _, replica := range rs.replicas {
+		ss := cs.stores[replica.StoreID]
+		if ss == nil {
+			panic(fmt.Sprintf("store %d not found stores=%v", replica.StoreID, cs.stores))
+		}
+		delete(cs.stores[replica.StoreID].adjusted.replicas, rangeMsg.RangeID)
+	}
+	rs.replicas = append(rs.replicas[:0], rangeMsg.Replicas...)
+	for _, replica := range rangeMsg.Replicas {
+		cs.stores[replica.StoreID].adjusted.replicas[rangeMsg.RangeID] = replica.ReplicaState
+	}
+
+	// Find any pending changes which are now enacted, according to the
+	// leaseholder.
+	var remainingChanges, enactedChanges []*pendingReplicaChange
+	for _, change := range rs.pendingChanges {
+		ss := cs.stores[change.target.StoreID]
+		adjustedReplicas, ok := ss.adjusted.replicas[rangeMsg.RangeID]
+		if !ok {
+			adjustedReplicas.ReplicaID = noReplicaID
+		}
+		if adjustedReplicas.subsumesChange(change.prev.ReplicaIDAndType, change.next) {
+			// The change has been enacted according to the leaseholder.
+			enactedChanges = append(enactedChanges, change)
+		} else {
+			remainingChanges = append(remainingChanges, change)
+		}
+	}
+
+	for _, change := range enactedChanges {
+		// Mark the change as enacted. Enacting a change does not remove the
+		// corresponding load adjustments. The store load message will do that,
+		// or GC, indiciating that the change is been reflected in the store
+		// load.
+		cs.markPendingChangeEnacted(change.ChangeID, now)
+	}
+	// Re-apply the remaining changes.
+	for _, change := range remainingChanges {
+		cs.applyReplicaChange(change.ReplicaChange)
+	}
+	normSpanConfig, err := makeNormalizedSpanConfig(&rangeMsg.Conf, cs.constraintMatcher.interner)
+	if err != nil {
+		// TODO(kvoli): Should we log as a warning here, or return further back out?
+		panic(err)
+	}
+	rs.conf = normSpanConfig
+	// NB: Always recompute the analyzed range constraints for any range,
+	// assuming the leaseholder wouldn't have sent the message if there was no
+	// change.
+	rs.constraints = nil
+}
+
 // If the pending change does not happen within this GC duration, we
 // forget it in the data-structure.
 const pendingChangeGCDuration = 5 * time.Minute
@@ -1329,14 +1333,7 @@ func (cs *clusterState) applyReplicaChange(change ReplicaChange) {
 	}
 	rangeState, ok := cs.ranges[change.rangeID]
 	if !ok {
-		// This is the first time encountering this range, we add it to the cluster
-		// state.
-		//
-		// TODO(kvoli): Pass in the range descriptor to construct the range state
-		// here. Currently, when the replica change is a removal this won't work
-		// because the range state will not contain the replica being removed.
-		rangeState = newRangeState()
-		cs.ranges[change.rangeID] = rangeState
+		panic(fmt.Sprintf("range %v not found in cluster state", change.rangeID))
 	}
 
 	if change.isRemoval() {
@@ -1360,8 +1357,10 @@ func (cs *clusterState) applyReplicaChange(change ReplicaChange) {
 			ReplicaState: replState,
 		})
 	} else {
-		panic(fmt.Sprintf("unknown replica change %+v", change))
+		panic(fmt.Sprintf("unknown replica change %+v replicas=%v pendingChanges=%v",
+			change, rangeState.replicas, rangeState.pendingChanges))
 	}
+
 	cs.applyChangeLoadDelta(change)
 }
 

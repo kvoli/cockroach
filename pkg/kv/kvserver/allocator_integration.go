@@ -6,6 +6,7 @@
 package kvserver
 
 import (
+	"context"
 	fmt "fmt"
 
 	"github.com/cockroachdb/cockroach/pkg/kv/kvpb"
@@ -13,6 +14,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/mma"
 	"github.com/cockroachdb/cockroach/pkg/kv/kvserver/allocator/storepool"
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
+	"github.com/cockroachdb/cockroach/pkg/util/log"
 )
 
 // The expected usage for the non-mma components is:
@@ -69,39 +71,22 @@ func (as *AllocatorSync) NonMMAPreTransferLease(
 	desc *roachpb.RangeDescriptor,
 	usage allocator.RangeUsageInfo,
 	transferFrom, transferTo roachpb.ReplicationTarget,
-) []mma.ChangeID {
-	existingReplicas := make([]mma.StoreIDAndReplicaState, len(desc.InternalReplicas))
-	for i, replica := range desc.Replicas().Descriptors() {
-		existingReplicas[i] = allocator.ReplicaDescriptorToReplicaIDAndType(replica, transferFrom.StoreID)
-	}
+	config roachpb.SpanConfig,
+) ([]mma.ChangeID, error) {
+	rangeMsg := allocator.MakeMMARangeMsg(desc, usage, transferFrom.StoreID, config)
 	replicaChanges := mma.MakeLeaseTransferChanges(desc.RangeID,
-		existingReplicas,
+		rangeMsg.Replicas,
 		allocator.UsageInfoToMMALoad(usage),
 		transferTo,
 		transferFrom,
 	)
-	// TODO(mma): RegisterExternalChanges would panic when the mma.Allocator state
-	// didn't contain a range for the external replica change being registered.
-	// Currently, this is handled by creating an empty range state for the range
-	// but this is also flawed, because a removal change could be registered
-	// against the empty range.
-	//
-	// Possible solutions to this problem:
-	//
-	// 1. Never let mma cluster state get out of sync with the storepool state.
-	// That only seems possible if we sequence store leaseholder messages before
-	// any external change registration.
-	//
-	// 2. Track using a different ID here, and then return that ID to the caller.
-	// Then, return an error when the range doesn't yet exist in the
-	// clusterState, the storepool still gets updated and drop the update to the
-	// mma cluster state.
-	//
-	// 3. Update the external change registration to also include the range
-	// descriptor, so that the cluster state can be updated if it doesn't exist
-	// yet e.g., pass in a mma.RangeMsg alongside the replica changes on each
-	// call to RegisterExternalChanges.
-	changeIDs := as.mmAllocator.RegisterExternalChanges(replicaChanges[:])
+	log.Infof(context.Background(), "registering external lease change: transfer_from=%v transfer_to=%v usage=%v changes=%v",
+		transferFrom, transferTo, usage, replicaChanges)
+	changeIDs, err := as.mmAllocator.RegisterExternalChangesForRange(replicaChanges[:], rangeMsg)
+	if err != nil {
+		log.Warningf(context.Background(), "failed to register external lease change: %v", err)
+		return nil, err
+	}
 	trackedChange := trackedAllocatorChange{
 		typ:          AllocatorChangeTypeLeaseTransfer,
 		usage:        usage,
@@ -109,38 +94,28 @@ func (as *AllocatorSync) NonMMAPreTransferLease(
 		transferFrom: transferFrom.StoreID,
 		transferTo:   transferTo.StoreID,
 	}
+	log.Infof(context.Background(), "registered external lease change: transfer_from=%v transfer_to=%v change_ids=%v",
+		transferFrom, transferTo, changeIDs)
 	// We only track one of the changeIDs, since they are the same for both
 	// lease transfer.
 	as.trackedChanges[changeIDs[0]] = trackedChange
-	return changeIDs
+	return changeIDs, nil
 }
 
 func (as *AllocatorSync) NonMMAPreChangeReplicas(
-	desc *roachpb.RangeDescriptor, usage allocator.RangeUsageInfo, changes kvpb.ReplicationChanges,
-) []mma.ChangeID {
+	desc *roachpb.RangeDescriptor,
+	usage allocator.RangeUsageInfo,
+	changes kvpb.ReplicationChanges,
+	config roachpb.SpanConfig,
+	lh roachpb.StoreID,
+) ([]mma.ChangeID, error) {
 	rLoad := allocator.UsageInfoToMMALoad(usage)
-	replicaChanges := make([]mma.ReplicaChange, len(changes))
+	replicaChanges := make([]mma.ReplicaChange, 0, len(changes))
 	replicaSet := desc.Replicas()
 
-	for i, chg := range changes {
-		// TODO(mma): Handle the leaseholder being added or removed. We currently don't
-		// know from the given arguments which replica is the leaseholder.
-		if chg.ChangeType == roachpb.ADD_VOTER ||
-			chg.ChangeType == roachpb.ADD_NON_VOTER {
-			rType := roachpb.VOTER_FULL
-			if chg.ChangeType == roachpb.ADD_NON_VOTER {
-				rType = roachpb.NON_VOTER
-			}
-			replicaChanges[i] = mma.MakeAddReplicaChange(
-				desc.RangeID, rLoad, mma.ReplicaState{
-					ReplicaIDAndType: mma.ReplicaIDAndType{
-						ReplicaType: mma.ReplicaType{
-							ReplicaType: rType,
-						},
-					},
-				}, chg.Target)
-		} else if chg.ChangeType == roachpb.REMOVE_VOTER ||
-			chg.ChangeType == roachpb.REMOVE_NON_VOTER {
+	var lhBeingRemoved bool
+	for _, chg := range changes {
+		if chg.ChangeType == roachpb.REMOVE_VOTER || chg.ChangeType == roachpb.REMOVE_NON_VOTER {
 			filteredSet := replicaSet.Filter(func(r roachpb.ReplicaDescriptor) bool {
 				return r.StoreID == chg.Target.StoreID
 			})
@@ -151,29 +126,64 @@ func (as *AllocatorSync) NonMMAPreChangeReplicas(
 					chg.Target.StoreID, replDescriptors, desc))
 			}
 			replDesc := replDescriptors[0]
-			replicaChanges[i] = mma.MakeRemoveReplicaChange(
+			lhBeingRemoved = replDesc.StoreID == lh
+			replicaChanges = append(replicaChanges, mma.MakeRemoveReplicaChange(
 				desc.RangeID, rLoad, mma.ReplicaState{
 					ReplicaIDAndType: mma.ReplicaIDAndType{
 						ReplicaID: replDesc.ReplicaID,
 						ReplicaType: mma.ReplicaType{
-							ReplicaType: replDesc.Type,
+							ReplicaType:   replDesc.Type,
+							IsLeaseholder: replDesc.StoreID == lh,
 						},
 					},
 				},
-				chg.Target)
+				chg.Target))
+		}
+	}
+
+	for _, chg := range changes {
+		if chg.ChangeType == roachpb.ADD_VOTER ||
+			chg.ChangeType == roachpb.ADD_NON_VOTER {
+			rType := roachpb.VOTER_FULL
+			if chg.ChangeType == roachpb.ADD_NON_VOTER {
+				rType = roachpb.NON_VOTER
+			}
+			replicaChanges = append(replicaChanges, mma.MakeAddReplicaChange(
+				desc.RangeID, rLoad, mma.ReplicaState{
+					ReplicaIDAndType: mma.ReplicaIDAndType{
+						ReplicaType: mma.ReplicaType{
+							ReplicaType:   rType,
+							IsLeaseholder: lhBeingRemoved && chg.ChangeType == roachpb.ADD_VOTER,
+						},
+					},
+				}, chg.Target))
+		} else if chg.ChangeType == roachpb.REMOVE_VOTER ||
+			chg.ChangeType == roachpb.REMOVE_NON_VOTER {
+			// Handled above.
+			continue
 		} else {
 			panic("unimplemented change type")
 		}
 	}
-	changeIDs := as.mmAllocator.RegisterExternalChanges(replicaChanges)
+
+	rangeMsg := allocator.MakeMMARangeMsg(desc, usage, lh, config)
+	log.Infof(context.Background(), "registering external replica change: chgs=%v usage=%v changes=%v",
+		changes, usage, replicaChanges)
+	changeIDs, err := as.mmAllocator.RegisterExternalChangesForRange(replicaChanges, rangeMsg)
+	if err != nil {
+		log.Warningf(context.Background(), "failed to register external lease change: %v", err)
+		return nil, err
+	}
 	trackedChange := trackedAllocatorChange{
 		typ:       AllocatorChangeTypeChangeReplicas,
 		usage:     usage,
 		changeIDs: changeIDs,
 		chgs:      changes,
 	}
+	log.Infof(context.Background(), "registered external replica change: chgs=%v change_ids=%v",
+		changes, changeIDs)
 	as.trackedChanges[changeIDs[0]] = trackedChange
-	return changeIDs
+	return changeIDs, nil
 }
 
 func (as *AllocatorSync) NonMMAPreRelocateRange(
@@ -209,6 +219,7 @@ func (as *AllocatorSync) MMAPreApply(
 // the old allocator components (lease queue, replicate queue and store
 // rebalancer), as well as the new mma.Allocator.
 func (as *AllocatorSync) PostApply(changeIDs []mma.ChangeID, success bool) {
+	log.Infof(context.Background(), "PostApply: changeIDs=%v success=%v", changeIDs, success)
 	as.mmAllocator.AdjustPendingChangesDisposition(changeIDs, success)
 
 	for _, changeID := range changeIDs {

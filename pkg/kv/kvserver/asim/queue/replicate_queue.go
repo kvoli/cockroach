@@ -172,6 +172,7 @@ func pushReplicateChange(
 ) []mma.ChangeID {
 	var stateChange state.Change
 	var changeIDs []mma.ChangeID
+	var err error
 	switch op := change.Op.(type) {
 	case plan.AllocationNoop:
 		// Nothing to do.
@@ -181,30 +182,34 @@ func pushReplicateChange(
 	case plan.AllocationTransferLeaseOp:
 		if as != nil {
 			// as may be nil in some tests.
-			changeIDs = as.NonMMAPreTransferLease(
+			if changeIDs, err = as.NonMMAPreTransferLease(
 				repl.Desc(),
 				repl.RangeUsageInfo(),
 				op.Source,
 				op.Target,
-			)
+				*repl.rng.SpanConfig(),
+			); err != nil {
+				return nil
+			}
 		}
 		stateChange = &state.LeaseTransferChange{
 			RangeID:        state.RangeID(change.Replica.GetRangeID()),
 			TransferTarget: state.StoreID(op.Target.StoreID),
 			Author:         state.StoreID(op.Source.StoreID),
-			// TODO(mma): Should this be add? I don't think so since it will assume
-			// it takes as long as adding a replica. Will need to regenerate the
-			// tests and check the output when changing this.
-			Wait: delayFn(repl.rng.Size(), false /* add */),
+			Wait:           delayFn(repl.rng.Size(), false /* add */),
 		}
 	case plan.AllocationChangeReplicasOp:
 		if as != nil {
 			// as may be nil in some tests.
-			changeIDs = as.NonMMAPreChangeReplicas(
+			if changeIDs, err = as.NonMMAPreChangeReplicas(
 				repl.Desc(),
 				repl.RangeUsageInfo(),
 				op.Chgs,
-			)
+				*repl.rng.SpanConfig(),
+				repl.StoreID(), /* lh */
+			); err != nil {
+				return nil
+			}
 		}
 		log.VEventf(ctx, 1, "pushing state change for range=%s, details=%s", repl.rng, op.Details)
 		stateChange = &state.ReplicaChange{

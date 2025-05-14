@@ -71,13 +71,15 @@ type Allocator interface {
 	// ProcessNodeLoadResponse.
 	AdjustPendingChangesDisposition(changes []ChangeID, success bool)
 
-	// RegisterExternalChanges informs this allocator about yet to complete
-	// changes to the cluster which were not initiated by this allocator. The
-	// caller is returned a list of ChangeIDs, corresponding 1:1 to each  replica
-	// change provided as an argument. The returned list of ChangeIDs should then
-	// be used to call AdjustPendingChangesDisposition when the changes are
-	// completed, either successfully or not.
-	RegisterExternalChanges(changes []ReplicaChange) []ChangeID
+	// RegisterExternalChangesForRange informs this allocator about yet to
+	// complete changes to the cluster for a specific range, which were not
+	// initiated by this allocator. The caller is returned a list of ChangeIDs,
+	// corresponding 1:1 to each  replica change provided as an argument. The
+	// returned list of ChangeIDs should then be used to call
+	// AdjustPendingChangesDisposition when the changes are completed, either
+	// successfully or not. When the change conflicts with the allocator's
+	// pending changes, an error is returned and no ChangeIDs are returned.
+	RegisterExternalChangesForRange(changes []ReplicaChange, rangeMsg RangeMsg) ([]ChangeID, error)
 
 	// ComputeChanges is called periodically and frequently, say every 10s.
 	//

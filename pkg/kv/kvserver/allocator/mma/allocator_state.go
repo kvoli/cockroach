@@ -19,6 +19,7 @@ import (
 	"github.com/cockroachdb/cockroach/pkg/roachpb"
 	"github.com/cockroachdb/cockroach/pkg/util/log"
 	"github.com/cockroachdb/cockroach/pkg/util/timeutil"
+	"github.com/cockroachdb/errors"
 )
 
 type allocatorState struct {
@@ -504,14 +505,25 @@ func (a *allocatorState) AdjustPendingChangesDisposition(changeIDs []ChangeID, s
 	}
 }
 
-// RegisterExternalChanges implements the Allocator interface.
-func (a *allocatorState) RegisterExternalChanges(changes []ReplicaChange) []ChangeID {
+// RegisterExternalChangesForRange implements the Allocator interface.
+func (a *allocatorState) RegisterExternalChangesForRange(
+	changes []ReplicaChange, rangeMsg RangeMsg,
+) ([]ChangeID, error) {
+	a.cs.processStoreLeaseholderRangeMsg(a.cs.ts.Now(), rangeMsg)
+	if len(a.cs.ranges[rangeMsg.RangeID].pendingChanges) > 0 {
+		// If the range already has pending changes, don't allow making further
+		// changes.
+		return nil, errors.Newf("pending changes already exist for range %d", rangeMsg.RangeID)
+	}
+	// If there are already pending changes for the given rangeID that are
+	// unresolved by the latest
+	log.Infof(context.Background(), "RegisterExternalChangesForRange(%v): %s", len(changes), changes)
 	pendingChanges := a.cs.createPendingChanges(changes...)
 	changeIDs := make([]ChangeID, len(pendingChanges))
 	for i, pendingChange := range pendingChanges {
 		changeIDs[i] = pendingChange.ChangeID
 	}
-	return changeIDs
+	return changeIDs, nil
 }
 
 // ComputeChanges implements the Allocator interface.

@@ -24,7 +24,44 @@ assertion type=stat stat=replicas ticks=5 exact_bound=0 stores=(13,14,15,16,17,1
 
 eval duration=10m samples=1 seed=42
 ----
-OK
+failed assertion sample 1
+  conformance under=0 violating=0 
+  actual unavailable=0 under=0, over=0 violating=10 lease-violating=0 lease-less-preferred=0
+violating constraints:
+  r8:0000000{350-400} [(n34,s34):1, (n1,s1):4, (n8,s8):5] applying constraints=[+region=US_East]
+  r10:0000000{450-500} [(n32,s32):1, (n10,s10):4, (n12,s12):5] applying constraints=[+region=US_East]
+  r23:00000011{00-50} [(n25,s25):1, (n1,s1):5, (n8,s8):4] applying constraints=[+region=US_East]
+  r44:0000002{150-200} [(n20,s20):1, (n10,s10):4, (n7,s7):5] applying constraints=[+region=US_East]
+  r50:0000002{450-500} [(n31,s31):1, (n5,s5):4, (n3,s3):5] applying constraints=[+region=US_East]
+  r85:00000042{00-50} [(n7,s7):4, (n25,s25):2, (n2,s2):5] applying constraints=[+region=US_East]
+  r93:00000046{00-50} [(n21,s21):1, (n5,s5):5, (n1,s1):4] applying constraints=[+region=US_East]
+  r153:00000076{00-50} [(n24,s24):1, (n2,s2):5, (n10,s10):4] applying constraints=[+region=US_East]
+  r166:0000008{250-300} [(n5,s5):5, (n25,s25):2, (n6,s6):4] applying constraints=[+region=US_East]
+  r188:0000009{350-400} [(n24,s24):1, (n6,s6):4, (n12,s12):5] applying constraints=[+region=US_East]  stat=replicas value=(=0.00) ticks=5
+	store=20 stat=1.00
+	store=20 stat=1.00
+	store=20 stat=1.00
+	store=20 stat=1.00
+	store=20 stat=1.00
+	store=20 stat=1.00
+	store=21 stat=1.00
+	store=21 stat=1.00
+	store=21 stat=1.00
+	store=21 stat=1.00
+	store=21 stat=1.00
+	store=21 stat=1.00
+	store=24 stat=2.00
+	store=24 stat=2.00
+	store=24 stat=2.00
+	store=24 stat=2.00
+	store=24 stat=2.00
+	store=24 stat=2.00
+	store=25 stat=3.00
+	store=25 stat=3.00
+	store=25 stat=3.00
+	store=25 stat=3.00
+	store=25 stat=3.00
+	store=25 stat=3.00
 
 
 topology
@@ -55,22 +92,22 @@ plot stat=replicas
 ----
 ----
 
- 52.00 ┤          ╭╮    ╭╭─────────────────────────────────────────────────────────────
- 48.53 ┤          │╰╮╭─────────────────────────────────────────────────────────────────
- 45.07 ┤          │╭╮│──╯
- 41.60 ┤          ││╰╯╯
- 38.13 ┤        ╭─││╯╯
- 34.67 ┤        │╭╭╯
- 31.20 ┤        │╭╯╯
- 27.73 ┤        ││╯
- 24.27 ┤        ╭│╯
- 20.80 ┤       ╭╭╯
- 17.33 ┼────────╮╮
- 13.87 ┤       ╰╰╮╮╮
- 10.40 ┤        ╰╰──╮
-  6.93 ┤        ╰╰╰╰╰─╮
-  3.47 ┤         ╰╰╰─╰╰─╮─╮──╮
-  0.00 ┤          ╰╰──╰─╰──────────────────────────────────────────────────────────────
+ 51.00 ┤                                                 ╭─────────────────────────────
+ 47.60 ┤            ╭╮  ╭╮╭─╭─╭────────────────────────╭───────────────────────────────
+ 44.20 ┤            ││ ╭╮╭╭────────────────────────────╯─╯╯
+ 40.80 ┤            │╰────╯
+ 37.40 ┤        ╭─╭╭╯│╯╯
+ 34.00 ┤        │╭││─╯
+ 30.60 ┤        │╭╭╯
+ 27.20 ┤        │╭╯
+ 23.80 ┤        ╭│╯
+ 20.40 ┤       ╭╭╯
+ 17.00 ┼────────╮╮╮
+ 13.60 ┤       ╰╰─╮╮╮
+ 10.20 ┤        ╰╰╰────╮
+  6.80 ┤         ╰╰─╰╰─╰╮──╮
+  3.40 ┤         ╰╰╮╰╰─╰╰────────────────────────────────╮────╮───╮────────────────────
+  0.00 ┤           ╰────╰────╰───────────────────────────╰─────────────────────────────
                                             replicas
 ----
 ----
