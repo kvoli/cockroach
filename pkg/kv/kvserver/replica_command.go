@@ -372,6 +372,7 @@ func (r *Replica) adminSplitWithDescriptor(
 				return reply, errors.Wrap(err, "unable to determine split key")
 			}
 			if foundSplitKey == nil {
+				log.KvDistribution.Infof(ctx, "%v size based split start-key=%v end-key=%v", unsplittableRangeError{}, desc.StartKey, desc.EndKey)
 				// No suitable split key could be found.
 				return reply, unsplittableRangeError{}
 			}
@@ -403,6 +404,7 @@ func (r *Replica) adminSplitWithDescriptor(
 				); err != nil {
 					return reply, errors.Wrap(err, "unable to determine split key")
 				} else if foundSplitKey == nil {
+					log.KvDistribution.Infof(ctx, "%v load based split start-key=%v end-key=%v", unsplittableRangeError{}, desc.StartKey, desc.EndKey)
 					return reply, unsplittableRangeError{}
 				}
 			} else {
